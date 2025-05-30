@@ -1,6 +1,8 @@
-Flask
-Flask-Login
-python-pam
-pygame
-pysmb
-netifaces
+Flask>=2.0.0
+Flask-Login>=0.5.0
+pygame>=2.0.0
+pysmb>=1.2.0
+netifaces>=0.10.4
+Pillow>=8.0.0
+python-pam>=0.4.2
+six>=1.16.0
