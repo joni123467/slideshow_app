@@ -1,0 +1,14 @@
+# Pygame cache & Logs
+static/cache/
+*.log
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Config (falls sensible Daten drinstehen)
+config.json
+
+# Virtuelle Umgebung
+venv/
+

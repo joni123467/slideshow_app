@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Konfiguration - Slideshow{% endblock %}
+
+{% block content %}
+<h2>Konfiguration</h2>
+<form method="POST">
+
+  <!-- Allgemeine (globale) Einstellungen: Anzeigedauer, Rotation, Stretch -->
+  <h4>Allgemeine Einstellungen</h4>
+  <div class="form-group">
+    <label for="display_duration">Anzeigedauer (Sekunden):</label>
+    <input type="number" class="form-control" id="display_duration"
+           name="display_duration"
+           value="{{ config.get('display_duration', 5) }}" min="1">
+  </div>
+  <div class="form-group">
+    <label for="rotation">Rotation (Grad):</label>
+    <input type="number" class="form-control" id="rotation" name="rotation"
+           value="{{ config.get('rotation', 0) }}" min="0" max="360">
+  </div>
+  <!-- NEU: Checkbox stretch_images (global) -->
+  <div class="form-group form-check mt-3">
+    <input type="checkbox" class="form-check-input" id="stretch_images" name="stretch_images" 
+           value="true" {% if config.get('stretch_images', True) %}checked{% endif %}>
+    <label class="form-check-label" for="stretch_images">Bilder strecken (Skalierung auf Bildschirmgröße)</label>
+  </div>
+
+  <!-- NEU: Log-Level Auswahl -->
+  <div class="form-group mt-4">
+    <label for="log_level">Log-Level:</label>
+    <select class="form-control" id="log_level" name="log_level">
+      {% for level in ['DEBUG','INFO','WARNING','ERROR','CRITICAL'] %}
+        <option value="{{ level }}" {% if config.get('log_level')==level %}selected{% endif %}>{{ level }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <hr>
+
+  <!-- Vollbild-Konfiguration (nur gezeigt, wenn split_screen = false) -->
+  <div id="fullscreenFields">
+    <h4>Vollbild-Einstellungen</h4>
+    <div class="form-group">
+      <label for="image_path">Bildpfad (Vollbildmodus):</label>
+      <input type="text" class="form-control" id="image_path" name="image_path" 
+             value="{{ config.get('image_path', '') }}">
+    </div>
+    <div class="form-group">
+      <label for="smb_username">SMB Benutzername (Vollbildmodus):</label>
+      <input type="text" class="form-control" id="smb_username" name="smb_username"
+             value="{{ config.get('smb_username', '') }}">
+    </div>
+    <div class="form-group">
+      <label for="smb_password">SMB Passwort (Vollbildmodus):</label>
+      <input type="password" class="form-control" id="smb_password" name="smb_password"
+             value="{{ config.get('smb_password', '') }}">
+    </div>
+    <!-- NEU: SMB Domain (Vollbildmodus) -->
+    <div class="form-group">
+      <label for="smb_domain">SMB Domain (Vollbildmodus):</label>
+      <input type="text" class="form-control" id="smb_domain" name="smb_domain"
+             value="{{ config.get('smb_domain', '') }}">
+    </div>
+    <div class="form-group">
+      <label for="mode">Modus (Vollbild):</label>
+      <select class="form-control" id="mode" name="mode">
+        <option value="info" {% if config.get('mode') == 'info' %}selected{% endif %}>Info</option>
+        <option value="slideshow" {% if config.get('mode') == 'slideshow' %}selected{% endif %}>Slideshow</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Split-Screen-Checkbox -->
+  <div class="form-group form-check mt-3">
+    <input type="checkbox" class="form-check-input" id="split_screen" name="split_screen"
+           value="true" {% if config.get('split_screen', false) %}checked{% endif %}
+           onclick="toggleSplitScreenFields()">
+    <label class="form-check-label" for="split_screen">Split-Screen-Modus aktivieren</label>
+  </div>
+
+  <!-- Split-Screen-Felder: Einstellungen für linke und rechte Seite -->
+  <div id="splitScreenFields" style="display: none;">
+    <hr>
+    <h4>Split-Screen-Einstellungen</h4>
+    <p class="text-muted">Konfiguration für linke und rechte Seite.</p>
+    
+    <div class="row">
+      <!-- Linke Spalte -->
+      <div class="col-12 col-md-6">
+        <h5>Linke Seite</h5>
+        <div class="form-group">
+          <label for="image_path_left">Bildpfad (Links):</label>
+          <input type="text" class="form-control" id="image_path_left" name="image_path_left"
+                 value="{{ config.get('image_path_left', '') }}">
+        </div>
+        <div class="form-group">
+          <label for="mode_left">Modus (Links):</label>
+          <select class="form-control" id="mode_left" name="mode_left">
+            <option value="info" {% if config.get('mode_left') == 'info' %}selected{% endif %}>Info</option>
+            <option value="slideshow" {% if config.get('mode_left') == 'slideshow' %}selected{% endif %}>Slideshow</option>
+          </select>
+        </div>
+        <div class="form-group mt-3">
+          <label for="smb_username_left">SMB Benutzername (Links):</label>
+          <input type="text" class="form-control" id="smb_username_left" name="smb_username_left"
+                 value="{{ config.get('smb_username_left', '') }}">
+        </div>
+        <div class="form-group">
+          <label for="smb_password_left">SMB Passwort (Links):</label>
+          <input type="password" class="form-control" id="smb_password_left" name="smb_password_left"
+                 value="{{ config.get('smb_password_left', '') }}">
+        </div>
+        <!-- NEU: SMB Domain (Links) -->
+        <div class="form-group">
+          <label for="smb_domain_left">SMB Domain (Links):</label>
+          <input type="text" class="form-control" id="smb_domain_left" name="smb_domain_left"
+                 value="{{ config.get('smb_domain_left', '') }}">
+        </div>
+      </div>
+
+      <!-- Rechte Spalte -->
+      <div class="col-12 col-md-6">
+        <h5>Rechte Seite</h5>
+        <div class="form-group">
+          <label for="image_path_right">Bildpfad (Rechts):</label>
+          <input type="text" class="form-control" id="image_path_right" name="image_path_right"
+                 value="{{ config.get('image_path_right', '') }}">
+        </div>
+        <div class="form-group">
+          <label for="mode_right">Modus (Rechts):</label>
+          <select class="form-control" id="mode_right" name="mode_right">
+            <option value="info" {% if config.get('mode_right') == 'info' %}selected{% endif %}>Info</option>
+            <option value="slideshow" {% if config.get('mode_right') == 'slideshow' %}selected{% endif %}>Slideshow</option>
+          </select>
+        </div>
+        <div class="form-group mt-3">
+          <label for="smb_username_right">SMB Benutzername (Rechts):</label>
+          <input type="text" class="form-control" id="smb_username_right" name="smb_username_right"
+                 value="{{ config.get('smb_username_right', '') }}">
+        </div>
+        <div class="form-group">
+          <label for="smb_password_right">SMB Passwort (Rechts):</label>
+          <input type="password" class="form-control" id="smb_password_right" name="smb_password_right"
+                 value="{{ config.get('smb_password_right', '') }}">
+        </div>
+        <!-- NEU: SMB Domain (Rechts) -->
+        <div class="form-group">
+          <label for="smb_domain_right">SMB Domain (Rechts):</label>
+          <input type="text" class="form-control" id="smb_domain_right" name="smb_domain_right"
+                 value="{{ config.get('smb_domain_right', '') }}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-primary mt-4">Speichern</button>
+</form>
+
+<!-- Infofenster: Anzeige des aktuell angezeigten Bildes -->
+<div id="infoWindow" style="position: fixed; bottom: 10px; right: 10px; 
+     background: #fff; padding: 10px; border: 1px solid #ccc; 
+     box-shadow: 0 0 5px rgba(0,0,0,0.5); width: 250px;">
+  <h5>Aktuell angezeigt:</h5>
+
+  <div id="fullscreenPreview" style="display: none;">
+    <strong>Vollbild:</strong>
+    <img id="currentImageFullscreen" src="" alt="Fullscreen Bild" style="max-width: 220px;" />
+  </div>
+
+  <div id="leftPreview" style="display: none; margin-top:10px;">
+    <strong>Linke Seite:</strong>
+    <img id="currentImageLeft" src="" alt="Linkes Bild" style="max-width: 220px;" />
+  </div>
+
+  <div id="rightPreview" style="display: none; margin-top:10px;">
+    <strong>Rechte Seite:</strong>
+    <img id="currentImageRight" src="" alt="Rechtes Bild" style="max-width: 220px;" />
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+  function toggleSplitScreenFields() {
+    const splitScreenCheckbox = document.getElementById('split_screen');
+    const splitFields = document.getElementById('splitScreenFields');
+    const fullscreenFields = document.getElementById('fullscreenFields');
+
+    if (splitScreenCheckbox.checked) {
+      splitFields.style.display = 'block';
+      fullscreenFields.style.display = 'none';
+    } else {
+      splitFields.style.display = 'none';
+      fullscreenFields.style.display = 'block';
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', toggleSplitScreenFields);
+
+  function updateCurrentImage() {
+    fetch('/current_image')
+      .then(response => response.json())
+      .then(data => {
+        const split = document.getElementById('split_screen').checked;
+        
+        if (split) {
+          document.getElementById('fullscreenPreview').style.display = 'none';
+          if (data.left) {
+            document.getElementById('leftPreview').style.display = 'block';
+            document.getElementById('currentImageLeft').src = data.left;
+          } else {
+            document.getElementById('leftPreview').style.display = 'none';
+          }
+          if (data.right) {
+            document.getElementById('rightPreview').style.display = 'block';
+            document.getElementById('currentImageRight').src = data.right;
+          } else {
+            document.getElementById('rightPreview').style.display = 'none';
+          }
+        } else {
+          document.getElementById('leftPreview').style.display = 'none';
+          document.getElementById('rightPreview').style.display = 'none';
+          if (data.fullscreen) {
+            document.getElementById('fullscreenPreview').style.display = 'block';
+            document.getElementById('currentImageFullscreen').src = data.fullscreen;
+          } else {
+            document.getElementById('fullscreenPreview').style.display = 'none';
+          }
+        }
+      })
+      .catch(error => console.error('Fehler beim Abrufen des aktuellen Bildes:', error));
+  }
+
+  setInterval(updateCurrentImage, 1000);
+  updateCurrentImage();
+</script>
+{% endblock %}

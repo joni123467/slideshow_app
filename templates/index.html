@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Startseite{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <h2 class="mt-4">Willkommen, {{ current_user.id }}</h2>
+
+  <!-- Log-Ausschnitt als Bootstrap Card -->
+  <div class="card mt-4">
+    <div class="card-header">
+      Log-Ausschnitt
+    </div>
+    <div class="card-body p-0">
+      <pre id="logArea" style="font-size:0.7em; background-color:#f8f8f8; margin: 0; padding: 1rem;">
+{{ log_excerpt }}
+      </pre>
+    </div>
+  </div>
+
+  <!-- Log-Level ändern als Bootstrap Card -->
+  <div class="card mt-4">
+    <div class="card-header">
+      Log-Level ändern
+    </div>
+    <div class="card-body">
+      <form action="{{ url_for('update_log_level') }}" method="post">
+        <div class="form-group">
+          <label for="log_level">Log-Level:</label>
+          <select name="log_level" id="log_level" class="form-control">
+            <option value="DEBUG" {% if current_log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+            <option value="INFO" {% if current_log_level == 'INFO' %}selected{% endif %}>INFO</option>
+            <option value="WARNING" {% if current_log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
+            <option value="ERROR" {% if current_log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
+            <option value="CRITICAL" {% if current_log_level == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Aktualisieren</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  function updateLogExcerpt() {
+      fetch('{{ url_for("log_excerpt") }}')
+          .then(response => response.json())
+          .then(data => {
+              document.getElementById("logArea").textContent = data.log_excerpt;
+          })
+          .catch(err => console.error("Error fetching log excerpt:", err));
+  }
+  // Alle 5 Sekunden den Log-Ausschnitt aktualisieren
+  setInterval(updateLogExcerpt, 5000);
+</script>
+{% endblock %}

@@ -1,0 +1,151 @@
+/* static/css/common.css */
+
+/* Grund-Typografie und Hintergrund */
+body {
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  background-color: #f0f2f5;
+  color: #333;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+}
+
+/* Container zentrieren */
+.container,
+.container-fluid {
+  max-width: 960px;
+  margin: 2rem auto;
+  padding: 1rem;
+}
+
+/* Navbar super-schlank, eckig */
+.navbar {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+  align-items: center !important;   /* vertikal zentrieren */
+}
+
+/* Brand und Toggler */
+.navbar .navbar-brand,
+.navbar .navbar-toggler,
+.navbar .nav-link {
+  padding-top: 0.25rem !important;
+  padding-bottom: 0.25rem !important;
+  height: auto !important;
+  line-height: 1.5 !important;
+}
+/* Falls .container-fluid innerhalb der Navbar zusätzlichen Abstand hat */
+.navbar .container-fluid {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Karten (Bootstrap-Override) */
+.card {
+  border: 1px solid #d1d5db;
+  border-radius: 0;
+  box-shadow: none;
+  background-color: #fff;
+}
+
+/* Formulare modernisieren */
+.form-control {
+  border: 1px solid #ced4da;
+  border-radius: 0;
+  background-color: #fff;
+  transition: border-color .2s;
+}
+.form-control:focus {
+  border-color: #4caf50;
+  box-shadow: none;
+}
+
+/* Buttons in angenehmem Grün */
+.btn {
+  background-color: #4caf50;
+  color: #fff;
+  border: 1px solid #4caf50;
+  border-radius: 0;
+  padding: 0.5rem 1rem;
+  transition: background-color .2s, border-color .2s;
+}
+.btn:hover,
+.btn:focus {
+  background-color: #43a047;
+  border-color: #388e3c;
+}
+
+/* Danger-Button (rot) */
+.btn-danger {
+  background-color: #e53935;
+  border-color: #e53935;
+}
+.btn-danger:hover {
+  background-color: #d32f2f;
+  border-color: #c62828;
+}
+
+/* Outline-Secondary: nur Rahmen/Text grün, kein Hintergrund */
+.btn-outline-secondary {
+  background-color: transparent;
+  color: #4caf50;
+  border: 1px solid #4caf50;
+  border-radius: 0;
+  transition: background-color .2s, color .2s;
+}
+.btn-outline-secondary:hover,
+.btn-outline-secondary:focus {
+  background-color: #4caf50;
+  color: #fff;
+}
+
+/* Alerts ohne Rundungen */
+.alert {
+  border-radius: 0;
+  border: 1px solid transparent;
+}
+.alert-dismissible .btn-close {
+  float: right;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Infofenster eckig */
+#infoWindow {
+  border-radius: 0;
+  border: 1px solid #ced4da;
+  background-color: #fff;
+}
+
+/* Pre-Tags */
+pre {
+  border: 1px solid #ced4da;
+  border-radius: 0;
+  background-color: #f8f9fa;
+  padding: 1rem;
+  overflow: auto;
+}
+
+/* Links */
+a {
+  color: #4caf50;
+}
+a:hover {
+  color: #388e3c;
+  text-decoration: none;
+}
+
+/* Footer mit Versionsnummer unten rechts */
+.footer-version {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: #666;
+  background: rgba(255,255,255,0.8);
+  border-top-left-radius: 4px;
+  z-index: 1000;
+}

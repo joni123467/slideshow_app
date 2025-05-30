@@ -1,0 +1,6 @@
+Flask
+Flask-Login
+python-pam
+pygame
+pysmb
+netifaces
