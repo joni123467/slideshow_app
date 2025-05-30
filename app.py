@@ -14,6 +14,7 @@ from smb.SMBConnection import SMBConnection
 from contextlib import contextmanager
 import netifaces
 import subprocess  # Für Neustart, Helper-Skripte und Passwortänderung
+import threading
 
 # ------------------------------
 # Flask-Anwendung und Konfiguration
@@ -64,9 +65,9 @@ def load_user(user_id):
 def authenticate(username, password):
     p = pam.pam()
     return p.authenticate(username, password)
-
+    
 # ------------------------------
-# SMB-Verbindung als Context Manager
+# Update-Script starten
 # ------------------------------
 
 def run_update_script():
@@ -82,14 +83,22 @@ def run_update_script():
         logging.error(f"Update-Script Fehlgeschlagen: {e}")
         return False
 
+# ------------------------------
+# Web-Endpoint für Update
+# ------------------------------
+
 @app.route('/trigger_update', methods=['POST'])
 @login_required
 def trigger_update():
-    if run_update_script():
-        flash("Update erfolgreich – Dienste wurden neu gestartet.", "success")
-    else:
-        flash("Update fehlgeschlagen. Siehe Logs.", "danger")
-    return redirect(url_for('index'))
+    # Update in separatem Thread starten, damit der HTTP-Request nicht hängen bleibt
+    threading.Thread(target=run_update_script, daemon=True).start()
+    flash("Update wurde gestartet. Bitte warten…", "info")
+    # Zwischen-Seite mit automatischem Redirect zurück zur Startseite
+    return render_template('updating.html', wait_seconds=15)
+
+# ------------------------------
+# SMB-Verbindung als Context Manager
+# ------------------------------
 
 @contextmanager
 def smb_connection(username, password, domain, client_machine_name, server_name, server_ip):
