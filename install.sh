@@ -1,41 +1,55 @@
 #!/usr/bin/env bash
 set -eux
 
-# 1) System-Pakete installieren
+# --- Prüfe oder erstelle Benutzer 'administrator' ---
+if ! id -u administrator > /dev/null 2>&1; then
+  echo "Benutzer 'administrator' existiert nicht. Erstelle ihn..."
+  # Benutzer mit Home-Verzeichnis und Bash-Shell anlegen
+  sudo useradd -m -s /bin/bash administrator
+  # In sudo-Gruppe aufnehmen für erhöhte Rechte
+  sudo usermod -aG sudo administrator
+  echo "Benutzer 'administrator' angelegt."
+else
+  echo "Benutzer 'administrator' existiert bereits."
+fi
+
+# --- Installation System-Pakete ---
 sudo apt update
 sudo apt install -y \
   git python3 python3-venv python3-pip python3-dev libpam0g-dev libsmbclient-dev \
   build-essential
 
-# 2) Repo klonen
+# --- Repo klonen ---
 cd ~
 if [ ! -d slideshow_app ]; then
-  git clone https://github.com/joni123467/slideshow_app.git
+  git clone git@github.com:joni123467/slideshow_app.git
 fi
 cd slideshow_app
 
-# 3) Virtualenv anlegen & Dependencies installieren
+# --- Virtualenv anlegen & Dependencies installieren ---
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install -r requirements.txt
 
-# 4) update.sh ausführbar machen
+# --- Skript ausführbar machen ---
 chmod +x update.sh
 
-# 5) Helper-Skripte und systemd-Units deployen
-#    (deinen update.sh kannst Du jetzt auch direkt aufrufen)
-sudo mkdir -p /etc/systemd/system
+# --- Deploy Helper-Skripte ---
 sudo mkdir -p /usr/local/bin
-# Copy units
-sudo cp systemd/slideshow.service /etc/systemd/system/
-sudo cp systemd/app.service       /etc/systemd/system/
-# Copy helpers
 sudo cp helpers/update_hostname.sh       /usr/local/bin/
 sudo cp helpers/update_network_config.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/update_*.sh
+sudo chmod +x /usr/local/bin/update_hostname.sh
+sudo chmod +x /usr/local/bin/update_network_config.sh
 
-# 6) Sudoers‐Eintrag anlegen (für späteres update.sh)
-sudo tee /etc/sudoers.d/slideshow_app > /dev/null <<'EOF'
+# --- Deploy systemd-Service-Units ---
+sudo mkdir -p /etc/systemd/system
+sudo cp systemd/slideshow.service /etc/systemd/system/
+sudo cp systemd/app.service       /etc/systemd/system/
+
+# --- Sudoers-Eintrag für Update-Script (falls noch nicht vorhanden) ---
+SUDOERS_FILE=/etc/sudoers.d/slideshow_app
+if [ ! -f "$SUDOERS_FILE" ]; then
+  sudo tee "$SUDOERS_FILE" > /dev/null << 'EOF'
 administrator ALL=(ALL) NOPASSWD: \
   /bin/cp /home/administrator/slideshow_app/systemd/slideshow.service /etc/systemd/system/slideshow.service, \
   /bin/cp /home/administrator/slideshow_app/systemd/app.service /etc/systemd/system/app.service, \
@@ -49,14 +63,14 @@ administrator ALL=(ALL) NOPASSWD: \
   /bin/chmod +x /usr/local/bin/update_hostname.sh, \
   /bin/chmod +x /usr/local/bin/update_network_config.sh
 EOF
-sudo chmod 440 /etc/sudoers.d/slideshow_app
+  sudo chmod 440 "$SUDOERS_FILE"
+fi
 
-# 7) systemd neu laden & Services aktivieren/starten
+# --- systemd neu laden und Dienste aktivieren/starten ---
 sudo systemctl daemon-reload
 sudo systemctl enable slideshow.service
 sudo systemctl enable app.service
 sudo systemctl restart slideshow.service
 sudo systemctl restart app.service
 
-echo "=== Installation abgeschlossen! Deine Slideshow-App läuft jetzt ==="
-
+echo "=== Installation abgeschlossen! Slideshow-App ist startbereit ==="
