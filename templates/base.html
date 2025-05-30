@@ -40,7 +40,14 @@
                 Neustart
               </button>
             </form>
-          </li>
+          </li class="nav-item">
+		  <li>
+			<form action="{{ url_for('trigger_update') }}" method="post" class="d-flex">
+			  <button type="submit" class="btn btn-warning btn-sm me-2">
+				<i class="fas fa-sync-alt"></i> Update ausführen
+			  </button>
+			</form>
+		  </li>
           <li class="nav-item">
             <a class="btn btn-outline-secondary btn-sm me-2" href="{{ url_for('change_password') }}">
               Passwort ändern

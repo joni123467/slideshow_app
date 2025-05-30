@@ -1,6 +1,9 @@
 # Pygame cache & Logs
 static/cache/
 *.log
+*.log.1
+*.log.2
+*.log.3
 
 # Python bytecode
 __pycache__/

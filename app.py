@@ -69,6 +69,28 @@ def authenticate(username, password):
 # SMB-Verbindung als Context Manager
 # ------------------------------
 
+def run_update_script():
+    """
+    Ruft unser update.sh auf und gibt True bei Erfolg zurück.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(base_dir, 'update.sh')
+    try:
+        subprocess.check_call([script])
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Update-Script Fehlgeschlagen: {e}")
+        return False
+
+@app.route('/trigger_update', methods=['POST'])
+@login_required
+def trigger_update():
+    if run_update_script():
+        flash("Update erfolgreich – Dienste wurden neu gestartet.", "success")
+    else:
+        flash("Update fehlgeschlagen. Siehe Logs.", "danger")
+    return redirect(url_for('index'))
+
 @contextmanager
 def smb_connection(username, password, domain, client_machine_name, server_name, server_ip):
     conn = SMBConnection(username, password, client_machine_name, server_name, domain=domain, use_ntlm_v2=True)
