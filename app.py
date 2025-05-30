@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import netifaces
 import subprocess  # Für Neustart, Helper-Skripte und Passwortänderung
 import threading
+import time
 
 # ------------------------------
 # Flask-Anwendung und Konfiguration
@@ -71,17 +72,47 @@ def authenticate(username, password):
 # ------------------------------
 
 def run_update_script():
-    """
-    Ruft unser update.sh auf und gibt True bei Erfolg zurück.
-    """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(base_dir, 'update.sh')
+    log_path = os.path.join(base_dir, 'update.log')
+
     try:
-        subprocess.check_call([script])
+        logging.info("Web-trigger /trigger_update eingegangen — starte update.sh im Hintergrund")
+
+        # Öffne unser Update-Logfile
+        with open(log_path, 'a') as lf:
+            start_ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            lf.write(f"\n[{start_ts}] Triggered via web\n")
+
+            # Starte das Script per Bash, leite alles in unser Log
+            proc = subprocess.Popen(
+                ['/bin/bash', script],
+                cwd=base_dir,
+                stdout=lf,
+                stderr=lf
+            )
+            proc.wait()
+
+            end_ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            lf.write(f"[{end_ts}] update.sh beendet mit Exit-Code {proc.returncode}\n")
+
+        if proc.returncode != 0:
+            logging.error(f"update.sh endete mit Exit-Code {proc.returncode}")
+            return False
+
+        logging.info("update.sh erfolgreich durchgelaufen")
         return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Update-Script Fehlgeschlagen: {e}")
+
+    except Exception as e:
+        # Fange **alle** Fehler und schreibe sie ins Log
+        logging.exception("Fehler in run_update_script()")
+        try:
+            with open(log_path, 'a') as lf:
+                lf.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Exception: {e}\n")
+        except:
+            pass
         return False
+
 
 # ------------------------------
 # Web-Endpoint für Update
@@ -92,7 +123,6 @@ def run_update_script():
 def trigger_update():
     # Update in separatem Thread starten, damit der HTTP-Request nicht hängen bleibt
     threading.Thread(target=run_update_script, daemon=True).start()
-    flash("Update wurde gestartet. Bitte warten…", "info")
     # Zwischen-Seite mit automatischem Redirect zurück zur Startseite
     return render_template('updating.html', wait_seconds=15)
 
