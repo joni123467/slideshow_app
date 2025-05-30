@@ -1,0 +1,13 @@
+[Unit]
+Description=Flask App Service
+After=network.target
+
+[Service]
+User=administrator
+WorkingDirectory=/home/administrator/slideshow_app
+ExecStart=/home/administrator/slideshow_app/venv/bin/python3 /home/administrator/slideshow_app/app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+

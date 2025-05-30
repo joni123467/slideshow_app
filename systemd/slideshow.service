@@ -1,0 +1,16 @@
+[Unit]
+Description=Slideshow GUI
+After=graphical.target display-manager.service
+Wants=graphical.target
+
+[Service]
+User=administrator
+Environment=DISPLAY=:0
+WorkingDirectory=/home/administrator/slideshow_app
+ExecStartPre=/bin/sleep 10
+ExecStart=/home/administrator/slideshow_app/venv/bin/python3 /home/administrator/slideshow_app/slideshow.py
+Restart=always
+
+[Install]
+WantedBy=graphical.target
+
