@@ -124,7 +124,7 @@ def trigger_update():
     # Update in separatem Thread starten, damit der HTTP-Request nicht hängen bleibt
     threading.Thread(target=run_update_script, daemon=True).start()
     # Zwischen-Seite mit automatischem Redirect zurück zur Startseite
-    return render_template('updating.html', wait_seconds=15)
+    return render_template('updating.html', wait_seconds=60)
 
 # ------------------------------
 # SMB-Verbindung als Context Manager
