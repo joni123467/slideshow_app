@@ -76,7 +76,11 @@ if [ -n "$RELEASE_REF" ]; then
   echo "-> Verwende release_branch aus config.json: '$RELEASE_REF'"
 else
   # 5.3) Suche zuerst nach allen Release-Branches (remote: origin/release/*)
-  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's@origin/@@' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  BRANCHES_RAW=$(git branch -r \
+    | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' \
+    | sed 's@origin/@@' \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
   if [ -n "$BRANCHES_RAW" ]; then
     # Sortiere semantisch aufsteigend und wähle das letzte (höchste)
     RELEASE_REF=$(echo "$BRANCHES_RAW" | sort -V | tail -n1)
@@ -112,16 +116,19 @@ EOF
   fi
 fi
 
-# 6) Checkout des Release-Refs (Branch oder Tag)
+# 6) Checkout des Release-Refs (Branch oder Tag oder Remote-Branch)
 if git show-ref --verify --quiet "refs/heads/$RELEASE_REF"; then
-  echo "Checke Branch '$RELEASE_REF' aus"
+  echo "Checke lokalen Branch '$RELEASE_REF' aus"
   sudo -u "$ADMIN_USER" git checkout "$RELEASE_REF" -f
   sudo -u "$ADMIN_USER" git reset --hard "origin/$RELEASE_REF"
+elif git show-ref --verify --quiet "refs/remotes/origin/$RELEASE_REF"; then
+  echo "Checke Remote-Branch 'origin/$RELEASE_REF' aus und lege lokalen Branch an"
+  sudo -u "$ADMIN_USER" git checkout -B "$RELEASE_REF" "origin/$RELEASE_REF"
 elif git show-ref --verify --quiet "refs/tags/$RELEASE_REF"; then
   echo "Checke Tag '$RELEASE_REF' aus (detached HEAD)"
   sudo -u "$ADMIN_USER" git checkout "tags/$RELEASE_REF" -f
 else
-  echo "   Hinweis: '$RELEASE_REF' existiert nicht als Branch oder Tag. Verwende 'main'."
+  echo "   Hinweis: '$RELEASE_REF' existiert weder als Branch noch als Tag. Verwende 'main'."
   RELEASE_REF="main"
   sudo -u "$ADMIN_USER" git checkout main -f
   sudo -u "$ADMIN_USER" git reset --hard origin/main
