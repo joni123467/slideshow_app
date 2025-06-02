@@ -3,9 +3,9 @@ set -eux
 
 # =============================================================================
 # Slideshow-App Update-Skript
-# Wenn in config.json ein "release_branch" definiert ist, wird dieser
-# Branch verwendet. Nur wenn kein Branch in config.json steht und keine Tags
-# existieren, fällt das Skript auf "main" zurück.
+# Wenn in config.json ein "release_branch" definiert ist, wird dieser Branch oder Tag verwendet.
+# Falls kein Eintrag existiert, sucht es zuerst nach neuesten remote-Branches unter 'origin/release/*',
+# andernfalls nach Tags. Nur wenn weder Release-Branch noch Tag gefunden werden, fällt es auf "main" zurück.
 # =============================================================================
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -61,27 +61,33 @@ CONFIG_PATH="$BASE_DIR/config.json"
 RELEASE_REF=""
 
 if [ -f "$CONFIG_PATH" ]; then
-  # Lese den Wert, falls vorhanden. Falls key fehlt oder leer, bleibt RELEASE_REF leer.
   RELEASE_REF=$(jq -r '.release_branch // empty' "$CONFIG_PATH")
 fi
 
 if [ -n "$RELEASE_REF" ]; then
-  echo "-> Verwende Release-Branch/-Tag aus config.json: $RELEASE_REF" | tee -a "$LOGFILE"
+  echo "-> Verwende release_branch aus config.json: $RELEASE_REF" | tee -a "$LOGFILE"
 else
-  echo "-> Kein release_branch in config.json definiert, ermittle neuesten Tag…" | tee -a "$LOGFILE"
-  # Stelle sicher, dass alle Tags lokal vorliegen
+  echo "-> Kein release_branch in config.json definiert, suche zuerst nach Release-Branches…" | tee -a "$LOGFILE"
+  # --- 4.1) Finde alle remote-Branches unter origin/release/vX.Y.Z ---
   git fetch --all --tags | tee -a "$LOGFILE"
-  # Ermittle das neueste Tag (semantisch sortiert)
-  LATEST_TAG=$(git tag -l --sort=-version:refname | head -n1)
-  if [ -n "$LATEST_TAG" ]; then
-    RELEASE_REF="$LATEST_TAG"
-    echo "   Neuestes Tag gefunden: $RELEASE_REF" | tee -a "$LOGFILE"
+  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+')
+  if [ -n "$BRANCHES_RAW" ]; then
+    # Entferne das "origin/"-Prefix und sortiere semantisch aufsteigend, wähle das größte
+    RELEASE_REF=$(echo "$BRANCHES_RAW" | sed 's|origin/||' | sort -V | tail -n1)
+    echo "   Neuster Release-Branch gefunden: $RELEASE_REF" | tee -a "$LOGFILE"
   else
-    echo "   Warnung: Keine Tags gefunden, verwende 'main' als Fallback" | tee -a "$LOGFILE"
-    RELEASE_REF="main"
+    echo "   Keine Release-Branches gefunden, suche nach Tags…" | tee -a "$LOGFILE"
+    TAGS_RAW=$(git tag -l --sort=-version:refname)
+    if [ -n "$TAGS_RAW" ]; then
+      RELEASE_REF=$(echo "$TAGS_RAW" | head -n1)
+      echo "   Neustes Tag gefunden: $RELEASE_REF" | tee -a "$LOGFILE"
+    else
+      echo "   Warnung: Keine Release-Branches oder Tags gefunden. Nutze 'main' als Fallback." | tee -a "$LOGFILE"
+      RELEASE_REF="main"
+    fi
   fi
 
-  # Schreibe das ermittelte Release-Ref zurück in config.json
+  # --- 4.2) Schreibe das ermittelte Release-Ref zurück in config.json ---
   if [ -f "$CONFIG_PATH" ]; then
     tmpfile=$(mktemp)
     jq --arg ref "$RELEASE_REF" '.release_branch = $ref' "$CONFIG_PATH" > "$tmpfile"
@@ -97,25 +103,20 @@ EOF
   fi
 fi
 
-# --- 5) Git fetch -- alle Branches und Tags, dann Checkout des Release-Refs ---
+# --- 5) Git fetch aller Branches und Tags, dann Checkout des Release-Refs ---
 echo "-> Git fetch --all" | tee -a "$LOGFILE"
 git fetch --all | tee -a "$LOGFILE"
 
-# Prüfe, ob der Release-Ref ein Branch ist
 if git show-ref --verify --quiet "refs/heads/$RELEASE_REF"; then
   echo "-> Checke Branch '$RELEASE_REF' aus" | tee -a "$LOGFILE"
   git checkout "$RELEASE_REF" -f | tee -a "$LOGFILE"
   echo "-> Reset auf origin/$RELEASE_REF" | tee -a "$LOGFILE"
   git reset --hard "origin/$RELEASE_REF" | tee -a "$LOGFILE"
-
-# Prüfe, ob der Release-Ref ein Tag ist
 elif git show-ref --verify --quiet "refs/tags/$RELEASE_REF"; then
   echo "-> Checke Tag '$RELEASE_REF' aus (detached HEAD)" | tee -a "$LOGFILE"
   git checkout "tags/$RELEASE_REF" -f | tee -a "$LOGFILE"
-
-# Wenn weder Branch noch Tag existieren (unwahrscheinlich), falle auf main zurück
 else
-  echo "   Hinweis: '$RELEASE_REF' existiert nicht als Branch oder Tag. Nutze 'main'." | tee -a "$LOGFILE"
+  echo "   Hinweis: '$RELEASE_REF' existiert weder als Branch noch als Tag. Nutze 'main'." | tee -a "$LOGFILE"
   RELEASE_REF="main"
   git checkout main -f | tee -a "$LOGFILE"
   git reset --hard origin/main | tee -a "$LOGFILE"
@@ -177,4 +178,3 @@ for svc in slideshow app; do
 done
 
 echo "=== Update beendet: $(date '+%Y-%m-%d %H:%M:%S') – Release-Ref: $RELEASE_REF ===" | tee -a "$LOGFILE"
-
