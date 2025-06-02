@@ -61,45 +61,56 @@ CONFIG_PATH="$BASE_DIR/config.json"
 RELEASE_REF=""
 
 if [ -f "$CONFIG_PATH" ]; then
+  # Lese den Wert, falls vorhanden. Falls key fehlt oder leer, bleibt RELEASE_REF leer.
   RELEASE_REF=$(jq -r '.release_branch // empty' "$CONFIG_PATH")
 fi
 
 if [ -n "$RELEASE_REF" ]; then
-  echo "-> Verwende release_branch aus config.json: $RELEASE_REF" | tee -a "$LOGFILE"
+  # Trimme eventuelle Whitespace am Anfang/Ende
+  RELEASE_REF=$(echo "$RELEASE_REF" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  echo "-> Verwende release_branch aus config.json: '$RELEASE_REF'" | tee -a "$LOGFILE"
 else
   echo "-> Kein release_branch in config.json definiert, suche zuerst nach Release-Branches…" | tee -a "$LOGFILE"
-  # --- 4.1) Finde alle remote-Branches unter origin/release/vX.Y.Z ---
+
   git fetch --all --tags | tee -a "$LOGFILE"
-  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+')
+  # 4.1) Finde alle remote-Branches unter origin/release/vX.Y.Z
+  #     (Gebe das Ergebnis in eine Variable, entferne gleichzeitig führende Leerzeichen)
+  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^ *//')
+
   if [ -n "$BRANCHES_RAW" ]; then
-    # Entferne das "origin/"-Prefix und sortiere semantisch aufsteigend, wähle das größte
-    RELEASE_REF=$(echo "$BRANCHES_RAW" | sed 's|origin/||' | sort -V | tail -n1)
-    echo "   Neuster Release-Branch gefunden: $RELEASE_REF" | tee -a "$LOGFILE"
+    # Entferne „origin/“, trimme und sortiere semantisch
+    RELEASE_REF=$(echo "$BRANCHES_RAW"     \
+                  | sed 's|origin/||'      \
+                  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+                  | sort -V                \
+                  | tail -n1)
+    echo "   Neuster Release-Branch gefunden: '$RELEASE_REF'" | tee -a "$LOGFILE"
   else
     echo "   Keine Release-Branches gefunden, suche nach Tags…" | tee -a "$LOGFILE"
+    # 4.2) Suche nach Tags und trimme Leerzeichen
     TAGS_RAW=$(git tag -l --sort=-version:refname)
     if [ -n "$TAGS_RAW" ]; then
-      RELEASE_REF=$(echo "$TAGS_RAW" | head -n1)
-      echo "   Neustes Tag gefunden: $RELEASE_REF" | tee -a "$LOGFILE"
+      RELEASE_REF=$(echo "$TAGS_RAW" | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      echo "   Neustes Tag gefunden: '$RELEASE_REF'" | tee -a "$LOGFILE"
     else
       echo "   Warnung: Keine Release-Branches oder Tags gefunden. Nutze 'main' als Fallback." | tee -a "$LOGFILE"
       RELEASE_REF="main"
     fi
   fi
 
-  # --- 4.2) Schreibe das ermittelte Release-Ref zurück in config.json ---
+  # 4.3) Schreibe das ermittelte Release-Ref (ohne Leerzeichen) zurück in config.json
   if [ -f "$CONFIG_PATH" ]; then
     tmpfile=$(mktemp)
     jq --arg ref "$RELEASE_REF" '.release_branch = $ref' "$CONFIG_PATH" > "$tmpfile"
     mv "$tmpfile" "$CONFIG_PATH"
-    echo "   config.json aktualisiert mit release_branch: $RELEASE_REF" | tee -a "$LOGFILE"
+    echo "   config.json aktualisiert mit release_branch: '$RELEASE_REF'" | tee -a "$LOGFILE"
   else
     cat > "$CONFIG_PATH" <<EOF
 {
   "release_branch": "$RELEASE_REF"
 }
 EOF
-    echo "   config.json angelegt mit release_branch: $RELEASE_REF" | tee -a "$LOGFILE"
+    echo "   config.json angelegt mit release_branch: '$RELEASE_REF'" | tee -a "$LOGFILE"
   fi
 fi
 
