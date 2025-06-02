@@ -48,7 +48,7 @@ Installationsskript herunterladen und ausführen
 
 ```
 cd ~
-wget https://raw.githubusercontent.com/joni123467/slideshow_app/refs/heads/main/install.sh install.sh
+wget https://raw.githubusercontent.com/joni123467/slideshow_app/refs/heads/release/v0.1.1/install.sh install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
