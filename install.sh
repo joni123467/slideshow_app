@@ -66,24 +66,27 @@ CONFIG_PATH="$INSTALL_DIR/config.json"
 RELEASE_REF=""
 
 if [ -f "$CONFIG_PATH" ]; then
+  # Lese den Wert, falls vorhanden. Falls key fehlt oder leer, bleibt RELEASE_REF leer.
   RELEASE_REF=$(jq -r '.release_branch // empty' "$CONFIG_PATH")
+  # Trim whitespace
+  RELEASE_REF=$(echo "$RELEASE_REF" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 fi
 
 if [ -n "$RELEASE_REF" ]; then
-  echo "-> Verwende release_branch aus config.json: $RELEASE_REF"
+  echo "-> Verwende release_branch aus config.json: '$RELEASE_REF'"
 else
   # 5.3) Suche zuerst nach allen Release-Branches (remote: origin/release/*)
-  RELEASE_BRANCHES=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's@origin/@@')
-  if [ -n "$RELEASE_BRANCHES" ]; then
-    # Sortiere semantisch aufsteigend und wähle das letzte (höchste) 
-    RELEASE_REF=$(echo "$RELEASE_BRANCHES" | sort -V | tail -n1)
-    echo "   Neuster Release-Branch gefunden: $RELEASE_REF"
+  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's@origin/@@' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [ -n "$BRANCHES_RAW" ]; then
+    # Sortiere semantisch aufsteigend und wähle das letzte (höchste)
+    RELEASE_REF=$(echo "$BRANCHES_RAW" | sort -V | tail -n1)
+    echo "   Neuster Release-Branch gefunden: '$RELEASE_REF'"
   else
     # 5.4) Keine Release-Branches, suche nach Tags
-    TAGS=$(git tag -l --sort=-version:refname)
-    if [ -n "$TAGS" ]; then
-      RELEASE_REF=$(echo "$TAGS" | head -n1)
-      echo "   Neustes Release-Tag gefunden: $RELEASE_REF"
+    TAGS_RAW=$(git tag -l --sort=-version:refname)
+    if [ -n "$TAGS_RAW" ]; then
+      RELEASE_REF=$(echo "$TAGS_RAW" | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      echo "   Neustes Release-Tag gefunden: '$RELEASE_REF'"
     else
       # 5.5) Fallback auf main, falls keine Branches und keine Tags existieren
       echo "   Warnung: Keine Release-Branches oder Tags gefunden. Nutze 'main' als Fallback."
@@ -97,7 +100,7 @@ else
     jq --arg ref "$RELEASE_REF" '.release_branch = $ref' "$CONFIG_PATH" > "$tmpfile"
     mv "$tmpfile" "$CONFIG_PATH"
     sudo chown "$ADMIN_USER":"$ADMIN_USER" "$CONFIG_PATH"
-    echo "   config.json aktualisiert mit release_branch: $RELEASE_REF"
+    echo "   config.json aktualisiert mit release_branch: '$RELEASE_REF'"
   else
     cat > "$CONFIG_PATH" <<EOF
 {
@@ -105,7 +108,7 @@ else
 }
 EOF
     sudo chown "$ADMIN_USER":"$ADMIN_USER" "$CONFIG_PATH"
-    echo "   config.json neu erstellt mit release_branch: $RELEASE_REF"
+    echo "   config.json neu erstellt mit release_branch: '$RELEASE_REF'"
   fi
 fi
 
@@ -189,4 +192,3 @@ sudo systemctl restart slideshow.service
 sudo systemctl restart app.service
 
 echo "=== Installation/Update abgeschlossen – Slideshow-App läuft unter $INSTALL_DIR, Release-Ref: $RELEASE_REF ==="
-
