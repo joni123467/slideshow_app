@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -eux
 
+# =============================================================================
+# Slideshow-App Update-Skript (ohne SSH-Key)
+# =============================================================================
+
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$BASE_DIR"
 
-# === Sudoers-Einträge sicherstellen ===
+# --- 1) Sudoers-Einträge sicherstellen ---
 SUDOERS_FILE=/etc/sudoers.d/slideshow_app
 if ! sudo test -f "$SUDOERS_FILE"; then
-  echo "-> Erstelle Sudoers-Eintrag für automatisches Update" 
+  echo "-> Erstelle Sudoers-Eintrag für automatisches Update"
   sudo tee "$SUDOERS_FILE" > /dev/null <<'EOF'
 # Erlaubt Kopieren der systemd-Units
 administrator ALL=(ALL) NOPASSWD: /bin/cp /home/administrator/slideshow_app/systemd/slideshow.service /etc/systemd/system/slideshow.service
@@ -33,16 +37,26 @@ else
   echo "-> Sudoers-Eintrag bereits vorhanden"
 fi
 
+# --- 2) Logging vorbereiten ---
 LOGFILE="$BASE_DIR/update.log"
 echo "" >> "$LOGFILE"
 echo "=== Update startet: $(date '+%Y-%m-%d %H:%M:%S') ===" | tee -a "$LOGFILE"
 
-# 1) Repo updaten
+# --- 3) Git-Remote auf HTTPS umstellen (falls noch SSH) ---
+#    So stellen wir sicher, dass 'git fetch' ohne SSH-Key funktioniert.
+REPO_HTTPS_URL="https://github.com/joni123467/slideshow_app.git"
+current_remote=$(git remote get-url origin)
+if [[ "$current_remote" != "$REPO_HTTPS_URL" ]]; then
+  echo "-> Setze Git-Remote auf HTTPS" | tee -a "$LOGFILE"
+  git remote set-url origin "$REPO_HTTPS_URL" | tee -a "$LOGFILE"
+fi
+
+# --- 4) Repo updaten ---
 echo "-> Git fetch & reset" | tee -a "$LOGFILE"
 git fetch --all | tee -a "$LOGFILE"
 git reset --hard origin/main | tee -a "$LOGFILE"
 
-# 2) Virtualenv anlegen/installieren
+# --- 5) Virtualenv prüfen/erstellen ---
 echo "-> Virtualenv prüfen/erstellen" | tee -a "$LOGFILE"
 if [ ! -d venv ]; then
   python3 -m venv venv | tee -a "$LOGFILE"
@@ -52,7 +66,8 @@ else
 fi
 
 VENV_PIP="$BASE_DIR/venv/bin/pip"
-# 3) Dependencies installieren
+
+# --- 6) Dependencies installieren ---
 echo "-> Installiere Dependencies" | tee -a "$LOGFILE"
 if [ -f requirements.txt ]; then
   $VENV_PIP install --upgrade pip | tee -a "$LOGFILE"
@@ -61,7 +76,7 @@ else
   echo "   Keine requirements.txt gefunden, überspringe" | tee -a "$LOGFILE"
 fi
 
-# 4) Service-Unit- und Helper-Skripte deployen
+# --- 7) Service-Unit- und Helper-Skripte deployen ---
 echo "-> Deploy Service-Units" | tee -a "$LOGFILE"
 for svcfile in slideshow.service app.service; do
   if [ -f "$BASE_DIR/systemd/$svcfile" ]; then
@@ -79,7 +94,7 @@ for helper in helpers/update_hostname.sh helpers/update_network_config.sh; do
   fi
 done
 
-# 5) systemd neu laden & Dienste neu starten
+# --- 8) systemd neu laden & Dienste neu starten ---
 echo "-> Reload systemd daemon" | tee -a "$LOGFILE"
 sudo systemctl daemon-reload | tee -a "$LOGFILE"
 
@@ -90,7 +105,7 @@ for svc in slideshow app; do
     echo "   Restart $unit" | tee -a "$LOGFILE"
     sudo systemctl restart "$unit" | tee -a "$LOGFILE"
   else
-    echo "   Start $unit" | tee- a "$LOGFILE"
+    echo "   Start $unit" | tee -a "$LOGFILE"
     sudo systemctl start "$unit" | tee -a "$LOGFILE"
   fi
 done
