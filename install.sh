@@ -2,7 +2,8 @@
 set -eux
 
 # =============================================================================
-# Slideshow-App Installationsskript (immer neuestes Release-Tag installieren)
+# Slideshow-App Installationsskript (immer neuesten Release-Branch/-Tag installieren,
+# jq installieren und release_branch in config.json schreiben)
 # =============================================================================
 
 # 1) Basis-Konfiguration
@@ -26,7 +27,7 @@ fi
 sudo mkdir -p "$ADMIN_HOME"
 sudo chown "$ADMIN_USER":"$ADMIN_USER" "$ADMIN_HOME"
 
-# 3) System-Pakete installieren
+# 3) System-Pakete installieren (inklusive jq)
 echo "Installiere System-Pakete..."
 sudo apt update
 sudo apt install -y \
@@ -48,33 +49,79 @@ else
   echo "Aktualisiere Repo in $INSTALL_DIR"
   cd "$INSTALL_DIR"
   sudo -u "$ADMIN_USER" git fetch --all --tags
+  sudo -u "$ADMIN_USER" git fetch --all
   sudo -u "$ADMIN_USER" git reset --hard origin/main
 fi
 
 cd "$INSTALL_DIR"
 
-# 5) Neuestes Git-Tag ermitteln
-echo "Ermittle neuestes Release-Tag..."
-# Stelle sicher, dass alle Tags lokal vorhanden sind
+# 5) Release-Branch/-Tag ermitteln
+echo "Ermittle verfügbaren Release-Branch oder Tag..."
+
+# 5.1) Holen aller remote-Branches und Tags
 sudo -u "$ADMIN_USER" git fetch --all --tags
-# Verwende semver-sort und wähle das oberste
-LATEST_TAG=$(sudo -u "$ADMIN_USER" git tag -l --sort=-version:refname | head -n1)
-if [ -z "$LATEST_TAG" ]; then
-  echo "   Keine Tags im Repo gefunden. Nutze 'main'."
-  RELEASE_REF="main"
-else
-  RELEASE_REF="$LATEST_TAG"
-  echo "   Neuestes Release-Tag: $RELEASE_REF"
+
+# 5.2) Prüfe config.json auf bestehenden release_branch
+CONFIG_PATH="$INSTALL_DIR/config.json"
+RELEASE_REF=""
+
+if [ -f "$CONFIG_PATH" ]; then
+  RELEASE_REF=$(jq -r '.release_branch // empty' "$CONFIG_PATH")
 fi
 
-# 6) Checkout des Release-Tags oder main
-if [ "$RELEASE_REF" = "main" ]; then
-  echo "Checke Branch 'main' aus"
-  sudo -u "$ADMIN_USER" git checkout main -f
-  sudo -u "$ADMIN_USER" git pull origin main
+if [ -n "$RELEASE_REF" ]; then
+  echo "-> Verwende release_branch aus config.json: $RELEASE_REF"
 else
+  # 5.3) Suche zuerst nach allen Release-Branches (remote: origin/release/*)
+  RELEASE_BRANCHES=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's@origin/@@')
+  if [ -n "$RELEASE_BRANCHES" ]; then
+    # Sortiere semantisch aufsteigend und wähle das letzte (höchste) 
+    RELEASE_REF=$(echo "$RELEASE_BRANCHES" | sort -V | tail -n1)
+    echo "   Neuster Release-Branch gefunden: $RELEASE_REF"
+  else
+    # 5.4) Keine Release-Branches, suche nach Tags
+    TAGS=$(git tag -l --sort=-version:refname)
+    if [ -n "$TAGS" ]; then
+      RELEASE_REF=$(echo "$TAGS" | head -n1)
+      echo "   Neustes Release-Tag gefunden: $RELEASE_REF"
+    else
+      # 5.5) Fallback auf main, falls keine Branches und keine Tags existieren
+      echo "   Warnung: Keine Release-Branches oder Tags gefunden. Nutze 'main' als Fallback."
+      RELEASE_REF="main"
+    fi
+  fi
+
+  # 5.6) Schreibe ermitteltes RELEASE_REF in config.json zurück
+  if [ -f "$CONFIG_PATH" ]; then
+    tmpfile=$(mktemp)
+    jq --arg ref "$RELEASE_REF" '.release_branch = $ref' "$CONFIG_PATH" > "$tmpfile"
+    mv "$tmpfile" "$CONFIG_PATH"
+    sudo chown "$ADMIN_USER":"$ADMIN_USER" "$CONFIG_PATH"
+    echo "   config.json aktualisiert mit release_branch: $RELEASE_REF"
+  else
+    cat > "$CONFIG_PATH" <<EOF
+{
+  "release_branch": "$RELEASE_REF"
+}
+EOF
+    sudo chown "$ADMIN_USER":"$ADMIN_USER" "$CONFIG_PATH"
+    echo "   config.json neu erstellt mit release_branch: $RELEASE_REF"
+  fi
+fi
+
+# 6) Checkout des Release-Refs (Branch oder Tag)
+if git show-ref --verify --quiet "refs/heads/$RELEASE_REF"; then
+  echo "Checke Branch '$RELEASE_REF' aus"
+  sudo -u "$ADMIN_USER" git checkout "$RELEASE_REF" -f
+  sudo -u "$ADMIN_USER" git reset --hard "origin/$RELEASE_REF"
+elif git show-ref --verify --quiet "refs/tags/$RELEASE_REF"; then
   echo "Checke Tag '$RELEASE_REF' aus (detached HEAD)"
   sudo -u "$ADMIN_USER" git checkout "tags/$RELEASE_REF" -f
+else
+  echo "   Hinweis: '$RELEASE_REF' existiert nicht als Branch oder Tag. Verwende 'main'."
+  RELEASE_REF="main"
+  sudo -u "$ADMIN_USER" git checkout main -f
+  sudo -u "$ADMIN_USER" git reset --hard origin/main
 fi
 
 # 7) Virtualenv anlegen & Dependencies installieren
@@ -141,5 +188,5 @@ sudo systemctl enable app.service
 sudo systemctl restart slideshow.service
 sudo systemctl restart app.service
 
-echo "=== Installation/Update abgeschlossen – Slideshow-App läuft unter $INSTALL_DIR, Release: $RELEASE_REF ==="
+echo "=== Installation/Update abgeschlossen – Slideshow-App läuft unter $INSTALL_DIR, Release-Ref: $RELEASE_REF ==="
 
