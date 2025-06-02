@@ -48,8 +48,8 @@ Installationsskript herunterladen und ausführen
 
 ```
 cd ~
-git clone git@github.com:joni123467/slideshow_app.git
-cd slideshow_app
+wget https://raw.githubusercontent.com/joni123467/slideshow_app/refs/heads/main/install.sh install.sh
+chmod +x install.sh
 sudo ./install.sh
 ```
 
