@@ -25,17 +25,6 @@
     <label class="form-check-label" for="stretch_images">Bilder strecken (Skalierung auf Bildschirmgröße)</label>
   </div>
 
-  <!-- NEU: Log-Level Auswahl -->
-  <div class="form-group mt-4">
-    <label for="log_level">Log-Level:</label>
-    <select class="form-control" id="log_level" name="log_level">
-      {% for level in ['DEBUG','INFO','WARNING','ERROR','CRITICAL'] %}
-        <option value="{{ level }}" {% if config.get('log_level')==level %}selected{% endif %}>{{ level }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <hr>
-
   <!-- Vollbild-Konfiguration (nur gezeigt, wenn split_screen = false) -->
   <div id="fullscreenFields">
     <h4>Vollbild-Einstellungen</h4>

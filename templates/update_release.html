@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Release-Verwaltung & Update{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+  <h2 class="mb-4">Release-Verwaltung &amp; Update</h2>
+  
+  <div class="alert alert-info" role="alert">
+    <b>Aktueller Release:</b>
+    <span class="badge bg-primary" style="font-size:1em;">{{ current_release or "main" }}</span>
+  </div>
+
+  <div class="row">
+    <div class="col-md-7">
+      <div class="card mb-4">
+        <div class="card-header">
+          <strong>Release auswählen</strong>
+        </div>
+        <div class="card-body">
+          <form method="post" action="{{ url_for('set_release_branch') }}">
+            <div class="mb-3">
+              <label for="release_branch" class="form-label">Neuer Release-Branch:</label>
+              <select name="release_branch" id="release_branch" class="form-select">
+                {% for opt in options %}
+                  <option value="{{ opt }}" {% if opt == current_release %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="submit" class="btn btn-outline-primary">
+              Release übernehmen
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-5">
+      <div class="card mb-4">
+        <div class="card-header">
+          <strong>Update starten</strong>
+        </div>
+        <div class="card-body">
+          <form method="post" action="{{ url_for('trigger_release_update') }}">
+            <button type="submit" class="btn btn-success btn-lg w-100">
+              <i class="bi bi-arrow-repeat"></i>
+              Update jetzt durchführen
+            </button>
+          </form>
+          <div class="text-muted mt-3" style="font-size: 0.95em;">
+            Das System wird aktualisiert und startet ggf. die Anwendung neu.
+            <br>Du wirst nach Abschluss automatisch zurückgeleitet.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

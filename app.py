@@ -113,22 +113,56 @@ def run_update_script():
             pass
         return False
 
+@app.context_processor
+def inject_release_branch():
+    try:
+        config = load_config()
+        release_branch = config.get("release_branch", "main")
+    except Exception:
+        release_branch = "main"
+    return dict(current_release=release_branch)
 
-# ------------------------------
-# Web-Endpoint für Update
-# ------------------------------
-
-@app.route('/trigger_update', methods=['POST'])
+@app.route('/update_release', methods=['GET', 'POST'])
 @login_required
-def trigger_update():
-    # Update in separatem Thread starten, damit der HTTP-Request nicht hängen bleibt
-    threading.Thread(target=run_update_script, daemon=True).start()
-    # Zwischen-Seite mit automatischem Redirect zurück zur Startseite
-    return render_template('updating.html', wait_seconds=60)
+def update_release():
+    config = load_config()
+    current_release = config.get("release_branch", "")
+    try:
+        subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
+        branches = subprocess.check_output(["git", "branch", "-r"], text=True).splitlines()
+        release_branches = [
+            b.strip().replace("origin/", "")
+            for b in branches if re.match(r'^\s*origin/release/', b)
+        ]
+        tags = subprocess.check_output(["git", "tag", "--list"], text=True).splitlines()
+    except Exception as e:
+        release_branches = []
+        tags = []
+        flash("Fehler beim Ermitteln der Branches/Tags: " + str(e), "danger")
+    options = sorted(set(release_branches)) + sorted(set(tags))
+    return render_template(
+        "update_release.html",
+        current_release=current_release,
+        options=options
+    )
 
-# ------------------------------
-# SMB-Verbindung als Context Manager
-# ------------------------------
+@app.route('/set_release_branch', methods=['POST'])
+@login_required
+def set_release_branch():
+    new_release = request.form.get("release_branch")
+    config = load_config()
+    config["release_branch"] = new_release
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+    flash(f"Release-Branch/Tag auf '{new_release}' gesetzt.", "success")
+    return redirect(url_for('update_release'))
+
+@app.route('/trigger_release_update', methods=['POST'])
+@login_required
+def trigger_release_update():
+    # Startet das Update und zeigt updating.html an
+    threading.Thread(target=run_update_script, daemon=True).start()
+    return render_template('updating.html', wait_seconds=60)
 
 @contextmanager
 def smb_connection(username, password, domain, client_machine_name, server_name, server_ip):
