@@ -116,11 +116,11 @@ def run_update_script():
 @app.context_processor
 def inject_release_branch():
     try:
-        config = load_config()
-        release_branch = config.get("release_branch", "main")
+        with open("current_release.txt", "r") as f:
+            current_release = f.read().strip()
     except Exception:
-        release_branch = "main"
-    return dict(current_release=release_branch)
+        current_release = "unbekannt"
+    return dict(current_release=current_release)
 
 @app.route('/update_release', methods=['GET', 'POST'])
 @login_required
