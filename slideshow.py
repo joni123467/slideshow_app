@@ -8,61 +8,143 @@ import socket
 import platform
 import netifaces
 import logging
+import uuid
 from logging.handlers import RotatingFileHandler
-from smb.SMBConnection import SMBConnection
-from contextlib import contextmanager
-from PIL import Image   # für Bildrotation
+from PIL import Image
+
+# SMB2/3 Imports
+from smbprotocol.connection import Connection
+from smbprotocol.session import Session
+from smbprotocol.tree import TreeConnect
+from smbprotocol.open import Open, CreateDisposition, FilePipePrinterAccessMask, DirectoryAccessMask, ShareAccess, CreateOptions
+from smbprotocol.file_info import FileInformationClass
 
 CONFIG_FILE = 'config.json'
 CURRENT_IMAGE_FULLSCREEN = "current_image_fullscreen.txt"
 CURRENT_IMAGE_LEFT = "current_image_left.txt"
 CURRENT_IMAGE_RIGHT = "current_image_right.txt"
 
-# --- Logging Setup ---
-log_handler = RotatingFileHandler('slideshow.log', maxBytes=1048576, backupCount=3)
-formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s]: %(message)s')
-log_handler.setFormatter(formatter)
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)  # Default-Level, wird später nach config überschrieben
-root_logger.addHandler(log_handler)
+def set_loglevel_from_config(cfg):
+    lvl_name = cfg.get("log_level", "INFO").upper()
+    lvl = getattr(logging, lvl_name, logging.INFO)
+    logger = logging.getLogger()
+    logger.setLevel(lvl)
+    for handler in logger.handlers:
+        handler.setLevel(lvl)
 
+def setup_logging(log_level="INFO"):
+    root_logger = logging.getLogger()
+    while root_logger.handlers:
+        root_logger.handlers.pop()
+    log_handler = RotatingFileHandler('slideshow.log', maxBytes=1048576, backupCount=3)
+    formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s]: %(message)s')
+    log_handler.setFormatter(formatter)
+    log_handler.setLevel(log_level)
+    root_logger.addHandler(log_handler)
+    root_logger.setLevel(log_level)
+
+setup_logging("DEBUG") 
+
+logging.warning("Logging-Test: WARNING")
+logging.info("Logging-Test: INFO")
+logging.debug("Logging-Test: DEBUG")
+
+def normalize_smb_path(smb_path):
+    if smb_path.startswith('\\\\') or smb_path.startswith('//'):
+        path = smb_path.lstrip('\\/')
+        parts = re.split(r'[\\/]', path, maxsplit=2)
+        if len(parts) == 3:
+            server, share, rest = parts
+            return f"smb://{server}/{share}/{rest}"
+        elif len(parts) == 2:
+            server, share = parts
+            return f"smb://{server}/{share}/"
+        else:
+            return smb_path
+    return smb_path
 
 def to_relative_cache_path(absolute_path):
     filename = os.path.basename(absolute_path)
     return f"/static/cache/{filename}"
 
-
-@contextmanager
-def smb_connection(username, password, domain, client_machine_name, server_name, server_ip):
-    """
-    domain: z.B. 'MEINE-DOMÄNE' oder '' für Workgroup
-    """
-    conn = SMBConnection(
-        username,
-        password,
-        client_machine_name,
-        server_name,
-        domain=domain,
-        use_ntlm_v2=True
-    )
+def prefetch_smb2_images(smb_path, username, password, domain):
+    smb_path = normalize_smb_path(smb_path)
+    supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+    match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', smb_path)
+    if not match:
+        logging.error(f"Ungültiges SMB-Pfadformat: {smb_path}")
+        return []
+    server, share, remote_path = match.groups()
+    if remote_path.endswith('/'):
+        remote_path = remote_path[:-1]
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    local_files = []
     try:
-        if not (conn.connect(server_ip, 445) or conn.connect(server_ip, 139)):
-            logging.error(f"Verbindung zu SMB-Server {server_ip} fehlgeschlagen.")
-            yield None
+        logging.debug(f"Starte SMB-Connection zu {server}/{share}/{remote_path}")
+        connection = Connection(uuid.uuid4(), server, 445)
+        connection.connect()
+        if domain:
+            username_domain = f"{domain}\\{username}"
         else:
-            logging.info(f"SMB-Verbindung zu \\\\{server_name}\\ (Domain={domain}) hergestellt.")
-            yield conn
+            username_domain = username
+        session = Session(connection, username_domain, password)
+        session.connect()
+        tree = TreeConnect(session, f"\\\\{server}\\{share}")
+        tree.connect()
+        folder = Open(tree, remote_path)
+        folder.create(
+            impersonation_level=2,  # Standard ist Impersonation
+            desired_access=DirectoryAccessMask.FILE_LIST_DIRECTORY,
+            file_attributes=0,
+            share_access=ShareAccess.FILE_SHARE_READ,
+            create_disposition=CreateDisposition.FILE_OPEN,
+            create_options=CreateOptions.FILE_DIRECTORY_FILE
+        )
+        files = folder.query_directory("*", FileInformationClass.FILE_DIRECTORY_INFORMATION)
+        count = 0
+        for f in files:
+            name = f['file_name']
+            if hasattr(name, 'get_value'):
+                name = name.get_value()
+            if isinstance(name, bytes):
+                name = name.decode('utf-16-le').rstrip('\x00')
+            if name in ('.', '..') or not name.lower().endswith(supported_extensions):
+                logging.debug(f"Überspringe Datei/Ordner: {name}")
+                continue
+            remote_file = f"{remote_path}/{name}".replace('//', '/').replace('\\', '/')
+            cache_path = os.path.join(cache_dir, name)
+            try:
+                file_open = Open(tree, remote_file)
+                file_open.create(
+                    impersonation_level=2,
+                    desired_access=FilePipePrinterAccessMask.FILE_READ_DATA,
+                    file_attributes=0,
+                    share_access=ShareAccess.FILE_SHARE_READ,
+                    create_disposition=CreateDisposition.FILE_OPEN,
+                    create_options=0
+                )
+                size = f['end_of_file']
+                if hasattr(size, 'get_value'):
+                    size = size.get_value()
+                if size > 0:
+                    data = file_open.read(0, size)
+                    with open(cache_path, 'wb') as out:
+                        out.write(data)
+                    logging.debug(f"Datei geladen: {name}, {size} Bytes")
+                file_open.close()
+                local_files.append(cache_path)
+                count += 1
+            except Exception:
+                logging.warning(f"Fehler beim Laden der Datei {remote_file}", exc_info=True)
+        folder.close()
+        tree.disconnect()
+        session.disconnect()
+        connection.disconnect()
+        logging.info(f"SMB2/3-Prefetch abgeschlossen: {count} Dateien heruntergeladen.")
     except Exception:
-        logging.exception("Fehler beim Herstellen der Verbindung zu SMB-Server")
-        yield None
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            logging.exception("Fehler beim Schließen der SMB-Verbindung")
-        else:
-            logging.info(f"SMB-Verbindung zu {server_ip} geschlossen.")
-
+        logging.exception(f"Fehler beim Zugriff auf SMB2/3: {server}/{share}/{remote_path}")
+    return local_files
 
 def load_config():
     default_config = {
@@ -101,13 +183,12 @@ def load_config():
             if missing:
                 save_config(default_config)
                 logging.info(f"Fehlende SMB-Domain-Keys hinzugefügt: {missing}")
-            logging.info("Konfigurationsdatei erfolgreich geladen.")
+            logging.debug("Konfigurationsdatei erfolgreich geladen.")
         except Exception:
             logging.exception("Fehler beim Laden der Konfigurationsdatei")
     else:
         logging.warning("Konfigurationsdatei nicht gefunden. Verwende Standardeinstellungen.")
     return default_config
-
 
 def save_config(config):
     try:
@@ -116,7 +197,6 @@ def save_config(config):
         logging.info("Konfigurationsdatei erfolgreich aktualisiert.")
     except Exception:
         logging.exception("Fehler beim Schreiben der Konfigurationsdatei")
-
 
 def get_local_image_files(local_path):
     supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
@@ -136,43 +216,6 @@ def get_local_image_files(local_path):
             logging.error(f"Lokaler Pfad ist kein Verzeichnis: {local_path}")
     return image_files
 
-
-def prefetch_smb_images(smb_path, username, password, domain):
-    supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
-    match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', smb_path)
-    if not match:
-        logging.error(f"Ungültiges SMB-Pfadformat: {smb_path}")
-        return []
-    server, share, remote_path = match.groups()
-
-    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'cache')
-    os.makedirs(cache_dir, exist_ok=True)
-
-    local_files = []
-    logging.info(f"Starte SMB-Prefetch: {smb_path} (Domain={domain})")
-    with smb_connection(username, password, domain, "slideshow_client", server, server) as conn:
-        if conn:
-            try:
-                files = conn.listPath(share, remote_path)
-                count = 0
-                for f in files:
-                    name = f.filename
-                    if name in ('.', '..') or not name.lower().endswith(supported_extensions):
-                        continue
-                    remote_file = os.path.join(remote_path, name).replace('\\', '/')
-                    cache_path = os.path.join(cache_dir, name)
-                    with open(cache_path, 'wb') as out:
-                        conn.retrieveFile(share, remote_file, out)
-                    local_files.append(cache_path)
-                    count += 1
-                logging.info(f"SMB-Prefetch abgeschlossen: {count} Dateien heruntergeladen.")
-            except Exception:
-                logging.exception(f"Fehler beim Listen des SMB-Verzeichnisses {remote_path}")
-        else:
-            logging.error(f"SMB-Prefetch: Keine Verbindung zu {server}")
-    return local_files
-
-
 def display_message(surface, message, infoObject):
     try:
         font = pygame.font.SysFont(None, 48)
@@ -188,7 +231,6 @@ def display_message(surface, message, infoObject):
         y += 60
     pygame.display.flip()
 
-
 def get_ipv4_address():
     try:
         for iface in netifaces.interfaces():
@@ -198,13 +240,12 @@ def get_ipv4_address():
             for addr in addrs.get(netifaces.AF_INET, []):
                 ip = addr.get('addr')
                 if ip and not ip.startswith('169.254.'):
-                    logging.info(f"Ermittelte IPv4-Adresse: {ip}")
+                    logging.debug(f"Ermittelte IPv4-Adresse: {ip}")
                     return ip
         logging.warning("Keine gültige IPv4-Adresse gefunden.")
     except Exception:
         logging.exception("Fehler beim Ermitteln der IPv4-Adresse")
     return "Nicht verfügbar"
-
 
 def get_device_info():
     info = [
@@ -219,7 +260,7 @@ def get_device_info():
         total_kb = int(re.search(r'MemTotal:\s+(\d+)', mem_info).group(1))
         info.append(f"RAM: {total_kb // 1024} MB")
     except Exception:
-        logging.exception("Fehler beim Lesen von /proc/meminfo")
+        logging.warning("Fehler beim Lesen von /proc/meminfo", exc_info=True)
         info.append("RAM: Nicht verfügbar")
     ip = get_ipv4_address()
     info.append(f"IPv4-Adresse: {ip}")
@@ -232,8 +273,8 @@ def fetch_images_from_config(cfg):
     split_screen = cfg.get('split_screen', False)
     if not split_screen:
         path = cfg.get('image_path', '')
-        if path.startswith('smb://'):
-            imgs = prefetch_smb_images(
+        if path.startswith('smb://') or path.startswith('\\\\') or path.startswith('//'):
+            imgs = prefetch_smb2_images(
                 path,
                 cfg.get('smb_username', ''),
                 cfg.get('smb_password', ''),
@@ -246,8 +287,8 @@ def fetch_images_from_config(cfg):
     else:
         left = cfg.get('image_path_left', '')
         right = cfg.get('image_path_right', '')
-        if left.startswith('smb://'):
-            left_imgs = prefetch_smb_images(
+        if left.startswith('smb://') or left.startswith('\\\\') or left.startswith('//'):
+            left_imgs = prefetch_smb2_images(
                 left,
                 cfg.get('smb_username_left', ''),
                 cfg.get('smb_password_left', ''),
@@ -255,8 +296,8 @@ def fetch_images_from_config(cfg):
             )
         else:
             left_imgs = get_local_image_files(left)
-        if right.startswith('smb://'):
-            right_imgs = prefetch_smb_images(
+        if right.startswith('smb://') or right.startswith('\\\\') or right.startswith('//'):
+            right_imgs = prefetch_smb2_images(
                 right,
                 cfg.get('smb_username_right', ''),
                 cfg.get('smb_password_right', ''),
@@ -267,9 +308,14 @@ def fetch_images_from_config(cfg):
         logging.info(f"Fetch split: left={len(left_imgs)}, right={len(right_imgs)} Bilder")
         return ([], left_imgs, right_imgs)
 
-
 def main():
+    config = load_config()
+    set_loglevel_from_config(config)
+    lvl_name = config.get("log_level", "INFO").upper()
+    setup_logging(lvl_name)
+    logging.info(f"Log-Level auf {lvl_name} gesetzt")
     logging.info("Starte Slideshow-Programm")
+
     try:
         pygame.init()
         pygame.mouse.set_visible(False)
@@ -289,15 +335,6 @@ def main():
         sys.exit(1)
 
     clock = pygame.time.Clock()
-
-    # Config laden und Log-Level setzen
-    config = load_config()
-    lvl_name = config.get("log_level", "INFO").upper()
-    lvl = getattr(logging, lvl_name, logging.INFO)
-    for handler in logging.getLogger().handlers:
-        handler.setLevel(lvl)
-    logging.getLogger().setLevel(lvl)
-    logging.info(f"Log-Level auf {lvl_name} gesetzt")
 
     stretch_images = config.get("stretch_images", True)
     image_path = config.get('image_path', '')
@@ -370,6 +407,7 @@ def main():
             )
             if changed:
                 logging.info("Änderungen in config.json erkannt – lade neu.")
+                set_loglevel_from_config(current_config)
                 mode, mode_left, mode_right = new_mode, new_mode_left, new_mode_right
                 split_screen = new_split
                 display_duration = new_duration
@@ -406,15 +444,15 @@ def main():
             right_surf = pygame.Surface((right_w, infoObject.current_h))
 
             if time.time() - last_switch > display_duration:
-                if left_path.startswith('smb://'):
-                    left_images = prefetch_smb_images(
+                if left_path.startswith('smb://') or left_path.startswith('\\\\') or left_path.startswith('//'):
+                    left_images = prefetch_smb2_images(
                         left_path,
                         config.get('smb_username_left',''),
                         config.get('smb_password_left',''),
                         config.get('smb_domain_left','')
                     )
-                if right_path.startswith('smb://'):
-                    right_images = prefetch_smb_images(
+                if right_path.startswith('smb://') or right_path.startswith('\\\\') or right_path.startswith('//'):
+                    right_images = prefetch_smb2_images(
                         right_path,
                         config.get('smb_username_right',''),
                         config.get('smb_password_right',''),
@@ -529,8 +567,8 @@ def main():
             # Vollbild
             if mode == 'slideshow' and image_files:
                 if time.time() - last_switch > display_duration:
-                    if image_path.startswith('smb://'):
-                        image_files = prefetch_smb_images(
+                    if image_path.startswith('smb://') or image_path.startswith('\\\\') or image_path.startswith('//'):
+                        image_files = prefetch_smb2_images(
                             image_path,
                             config.get('smb_username',''),
                             config.get('smb_password',''),
@@ -599,8 +637,8 @@ def main():
         pygame.display.flip()
         clock.tick(30)
 
-
 if __name__ == '__main__':
+    # **Achtung:** Logging wird jetzt im Main gesetzt!
     if not os.path.exists(CONFIG_FILE):
         default_config = {
             "mode": "info",
@@ -628,9 +666,9 @@ if __name__ == '__main__':
         try:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(default_config, f, indent=4)
-            logging.info("Standardkonfigurationsdatei erstellt.")
-        except Exception:
-            logging.exception("Fehler beim Erstellen der Standardkonfigurationsdatei")
+            # Minimal Logging, da setup_logging noch nicht gesetzt ist!
+            print("Standardkonfigurationsdatei erstellt.")
+        except Exception as e:
+            print("Fehler beim Erstellen der Standardkonfigurationsdatei:", e)
         sys.exit(1)
-
     main()
