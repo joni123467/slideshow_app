@@ -116,14 +116,16 @@ fi
 
 # --- 5) Git fetch aller Branches und Tags, dann Checkout des Release-Refs ---
 echo "-> Git fetch --all" | tee -a "$LOGFILE"
-git fetch --all | tee -a "$LOGFILE"
+git fetch --all --tags | tee -a "$LOGFILE"
 
-if git show-ref --verify --quiet "refs/heads/$RELEASE_REF"; then
+# Existiert der Branch/TAG auf origin?
+BRANCH_EXISTS=$(git ls-remote --heads origin "$RELEASE_REF" | wc -l)
+TAG_EXISTS=$(git ls-remote --tags origin "$RELEASE_REF" | wc -l)
+
+if [ "$BRANCH_EXISTS" -gt 0 ]; then
   echo "-> Checke Branch '$RELEASE_REF' aus" | tee -a "$LOGFILE"
-  git checkout "$RELEASE_REF" -f | tee -a "$LOGFILE"
-  echo "-> Reset auf origin/$RELEASE_REF" | tee -a "$LOGFILE"
-  git reset --hard "origin/$RELEASE_REF" | tee -a "$LOGFILE"
-elif git show-ref --verify --quiet "refs/tags/$RELEASE_REF"; then
+  git checkout -B "$RELEASE_REF" "origin/$RELEASE_REF" -f | tee -a "$LOGFILE"
+elif [ "$TAG_EXISTS" -gt 0 ]; then
   echo "-> Checke Tag '$RELEASE_REF' aus (detached HEAD)" | tee -a "$LOGFILE"
   git checkout "tags/$RELEASE_REF" -f | tee -a "$LOGFILE"
 else
