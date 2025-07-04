@@ -188,4 +188,5 @@ for svc in slideshow app; do
   fi
 done
 
+echo "$RELEASE_REF" > current_release.txt
 echo "=== Update beendet: $(date '+%Y-%m-%d %H:%M:%S') – Release-Ref: $RELEASE_REF ===" | tee -a "$LOGFILE"
