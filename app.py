@@ -2,30 +2,16 @@ from flask import Flask, render_template, redirect, url_for, request, flash, jso
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import pam
 import os
-import re
 import json
-import ipaddress
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
 import socket
 import platform
 import netifaces
-import subprocess  # Für Neustart, Helper-Skripte und Passwortänderung
+import subprocess
 import threading
 import time
-
-# ---- NEU: SMB2/3 IMPORTS ----
-from smbprotocol.connection import Connection
-from smbprotocol.session import Session
-from smbprotocol.tree import TreeConnect
-from smbprotocol.open import Open, CreateDisposition, DirectoryAccessMask, ShareAccess, CreateOptions
-from smbprotocol.file_info import FileInformationClass
-import uuid
-
-# ------------------------------
-# Flask-Anwendung und Konfiguration
-# ------------------------------
 
 app = Flask(__name__)
 app.secret_key = b'your-fixed-secret-key-here'  # Ersetze dies durch einen starken Schlüssel
@@ -40,7 +26,6 @@ except Exception:
 # Log-Level aus Config oder Default
 log_level_str = config_data.get("log_level", "DEBUG")
 
-# Rotating File Handler einrichten
 log_handler = RotatingFileHandler('slideshow.log', maxBytes=1048576, backupCount=3)
 logging.basicConfig(
     handlers=[log_handler],
@@ -48,14 +33,9 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s:%(message)s'
 )
 
-# Flask-Login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-
-# ------------------------------
-# User-Klasse für Flask-Login
-# ------------------------------
 
 class User(UserMixin):
     def __init__(self, id):
@@ -65,32 +45,19 @@ class User(UserMixin):
 def load_user(user_id):
     return User(user_id)
 
-# ------------------------------
-# PAM-Authentifizierung
-# ------------------------------
-
 def authenticate(username, password):
     p = pam.pam()
     return p.authenticate(username, password)
-    
-# ------------------------------
-# Update-Script starten
-# ------------------------------
 
 def run_update_script():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(base_dir, 'update.sh')
     log_path = os.path.join(base_dir, 'update.log')
-
     try:
         logging.info("Web-trigger /trigger_update eingegangen — starte update.sh im Hintergrund")
-
-        # Öffne unser Update-Logfile
         with open(log_path, 'a') as lf:
             start_ts = time.strftime('%Y-%m-%d %H:%M:%S')
             lf.write(f"\n[{start_ts}] Triggered via web\n")
-
-            # Starte das Script per Bash, leite alles in unser Log
             proc = subprocess.Popen(
                 ['/bin/bash', script],
                 cwd=base_dir,
@@ -98,19 +65,14 @@ def run_update_script():
                 stderr=lf
             )
             proc.wait()
-
             end_ts = time.strftime('%Y-%m-%d %H:%M:%S')
             lf.write(f"[{end_ts}] update.sh beendet mit Exit-Code {proc.returncode}\n")
-
         if proc.returncode != 0:
             logging.error(f"update.sh endete mit Exit-Code {proc.returncode}")
             return False
-
         logging.info("update.sh erfolgreich durchgelaufen")
         return True
-
     except Exception as e:
-        # Fange **alle** Fehler und schreibe sie ins Log
         logging.exception("Fehler in run_update_script()")
         try:
             with open(log_path, 'a') as lf:
@@ -138,7 +100,7 @@ def update_release():
         branches = subprocess.check_output(["git", "branch", "-r"], text=True).splitlines()
         release_branches = [
             b.strip().replace("origin/", "")
-            for b in branches if re.match(r'^\s*origin/release/', b)
+            for b in branches if b.strip().startswith("origin/release/")
         ]
         tags = subprocess.check_output(["git", "tag", "--list"], text=True).splitlines()
     except Exception as e:
@@ -166,72 +128,8 @@ def set_release_branch():
 @app.route('/trigger_release_update', methods=['POST'])
 @login_required
 def trigger_release_update():
-    # Startet das Update und zeigt updating.html an
     threading.Thread(target=run_update_script, daemon=True).start()
     return render_template('updating.html', wait_seconds=60)
-
-# --------- NEU: SMB2/3 ohne Kontextmanager! -----------
-def get_image_files(path, username='', password='', domain=''):
-    supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
-    image_files = []
-
-    if path.startswith('smb://'):
-        match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', path)
-        if not match:
-            logging.error("Ungültiges SMB-Pfadformat.")
-            return []
-        server, share, remote_path = match.groups()
-        if remote_path.endswith('/'):
-            remote_path = remote_path[:-1]
-        try:
-            connection = Connection(uuid.uuid4(), server, 445)
-            connection.connect()
-            username_domain = f"{domain}\\{username}" if domain else username
-            session = Session(connection, username_domain, password)
-            session.connect()
-            tree = TreeConnect(session, f"\\\\{server}\\{share}")
-            tree.connect()
-            folder = Open(tree, remote_path)
-            folder.create(
-                impersonation_level=2,
-                desired_access=DirectoryAccessMask.FILE_LIST_DIRECTORY,
-                file_attributes=0,
-                share_access=ShareAccess.FILE_SHARE_READ,
-                create_disposition=CreateDisposition.FILE_OPEN,
-                create_options=CreateOptions.FILE_DIRECTORY_FILE
-            )
-            files = folder.query_directory("*", FileInformationClass.FILE_DIRECTORY_INFORMATION)
-            for f in files:
-                name = f['file_name']
-                if hasattr(name, 'get_value'):
-                    name = name.get_value()
-                if isinstance(name, bytes):
-                    name = name.decode('utf-16-le').rstrip('\x00')
-                if name in ('.', '..') or not name.lower().endswith(supported_extensions):
-                    continue
-                image_files.append(f"smb://{server}/{share}/{remote_path}/{name}")
-            folder.close()
-            tree.disconnect()
-            session.disconnect()
-            connection.disconnect()
-            logging.info(f"Gefundene Bilder im SMB-Pfad: {len(image_files)}")
-        except Exception as e:
-            logging.error(f"Fehler beim Auflisten des Verzeichnisses {remote_path}: {e}")
-    else:
-        if os.path.isdir(path):
-            try:
-                image_files = [
-                    os.path.join(path, f)
-                    for f in os.listdir(path)
-                    if f.lower().endswith(supported_extensions)
-                ]
-                logging.info(f"Gefundene Bilder im lokalen Pfad: {len(image_files)}")
-            except Exception as e:
-                logging.error(f"Fehler beim Lesen des lokalen Pfads: {e}")
-        else:
-            logging.error("Lokaler Pfad ist kein Verzeichnis.")
-    return image_files
-# -----------------------------------------------------
 
 def load_config():
     try:
@@ -242,20 +140,16 @@ def load_config():
     except Exception as e:
         logging.error(f"Fehler beim Laden der Konfigurationsdatei: {e}")
         sys.exit(1)
-        
+
 def get_current_interface_config(interface='eth0'):
-    """Ermittelt aktuelle IP, Gateway und DNS für das angegebene Interface."""
     config = {'ip': '', 'gateway': '', 'dns': ''}
     try:
-        # IP-Adresse
         addrs = netifaces.ifaddresses(interface)
         if netifaces.AF_INET in addrs:
             config['ip'] = addrs[netifaces.AF_INET][0].get('addr', '')
-        # Gateway
         gws = netifaces.gateways()
         if 'default' in gws and netifaces.AF_INET in gws['default']:
             config['gateway'] = gws['default'][netifaces.AF_INET][0]
-        # DNS aus /etc/resolv.conf (nur der erste Eintrag)
         with open('/etc/resolv.conf', 'r') as f:
             for line in f:
                 if line.startswith('nameserver'):
@@ -264,22 +158,6 @@ def get_current_interface_config(interface='eth0'):
     except Exception as e:
         logging.error(f"Fehler beim Ermitteln der Interface-Konfiguration: {e}")
     return config
-
-def display_message(screen, message, infoObject):
-    try:
-        import pygame
-        font = pygame.font.SysFont(None, 48)
-    except Exception as e:
-        logging.error(f"Fehler beim Laden der Schriftart: {e}")
-        sys.exit(1)
-    lines = message.split('\n')
-    y_offset = infoObject.current_h // 2 - (len(lines) * 30)
-    for line in lines:
-        text = font.render(line, True, (255, 255, 255))
-        rect = text.get_rect(center=(infoObject.current_w // 2, y_offset))
-        screen.blit(text, rect)
-        y_offset += 60
-    pygame.display.flip()
 
 def get_ipv4_address():
     try:
@@ -355,11 +233,9 @@ def change_password():
         if new_password != confirm_password:
             flash("Die neuen Passwörter stimmen nicht überein.", "danger")
             return redirect(url_for('change_password'))
-        
         if not authenticate(current_user.id, current_password):
             flash("Das aktuelle Passwort ist falsch.", "danger")
             return redirect(url_for('change_password'))
-        
         try:
             command = f"echo '{current_user.id}:{new_password}' | sudo chpasswd"
             subprocess.check_call(command, shell=True)
@@ -368,7 +244,6 @@ def change_password():
         except subprocess.CalledProcessError as e:
             flash("Fehler beim Ändern des Passworts.", "danger")
             logging.error(f"Fehler beim Ändern des Passworts: {e}")
-        
         return redirect(url_for('index'))
     return render_template('change_password.html')
 
@@ -402,33 +277,26 @@ def logout():
 @app.route('/')
 @login_required
 def index():
-    # Lese die letzten 20 Zeilen der Logdatei
-    log_excerpt = ""
     try:
         with open('slideshow.log', 'r') as f:
             lines = f.readlines()
             log_excerpt = "".join(lines[-20:])
     except Exception as e:
         log_excerpt = "Keine Log-Daten verfügbar."
-    
     current_config = load_config()
     current_log_level = current_config.get("log_level", "DEBUG")
-    
     return render_template('index.html', log_excerpt=log_excerpt, current_log_level=current_log_level)
-    
+
 @app.route('/update_log_level', methods=['POST'])
 @login_required
 def update_log_level():
     new_log_level = request.form.get("log_level", "DEBUG")
     try:
-        # Config laden, aktualisieren und speichern
         with open(CONFIG_FILE, 'r') as f:
             current_config = json.load(f)
         current_config["log_level"] = new_log_level
         with open(CONFIG_FILE, 'w') as f:
             json.dump(current_config, f, indent=4)
-        
-        # Logger dynamisch anpassen
         logging.getLogger().setLevel(getattr(logging, new_log_level.upper(), logging.DEBUG))
         flash("Log-Level erfolgreich aktualisiert.", "success")
     except Exception as e:
@@ -440,12 +308,10 @@ def update_log_level():
 def config():
     if request.method == 'POST':
         try:
-            split_screen_active   = ('split_screen' in request.form)
+            split_screen_active = ('split_screen' in request.form)
             stretch_images_active = ('stretch_images' in request.form)
-            # Bestehende Config einlesen, um log_level nicht zu verlieren
             with open(CONFIG_FILE, 'r') as f:
                 existing_cfg = json.load(f)
-
             new_config = {
                 "image_path": request.form.get('image_path', '').strip(),
                 "image_path_left": request.form.get('image_path_left', '').strip(),
@@ -467,12 +333,8 @@ def config():
                 "reload": False,
                 "split_screen": split_screen_active,
                 "stretch_images": stretch_images_active,
-                # log_level aus bestehender Config übernehmen
                 "log_level": existing_cfg.get("log_level", "DEBUG")
             }
-
-            # Validierung wie gehabt...
-
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(new_config, f, indent=4)
             flash('Konfiguration erfolgreich gespeichert.', 'success')
@@ -516,7 +378,6 @@ def config():
                 json.dump(current_config, f, indent=4)
             logging.info("Standardkonfiguration erstellt.")
 
-        # Fehlende Keys ergänzen
         needed_keys = [
             "image_path", "image_path_left", "image_path_right",
             "display_duration", "rotation",
@@ -555,14 +416,12 @@ def config():
 @login_required
 def network_config():
     if request.method == 'POST':
-        # (POST-Logik bleibt unverändert)
         new_hostname = request.form.get('hostname', '').strip()
         network_mode = request.form.get('network_mode', 'dhcp').strip()
         static_ip = request.form.get('static_ip', '').strip()
         routers = request.form.get('routers', '').strip()
         dns = request.form.get('dns', '').strip()
         errors = []
-        
         if not new_hostname:
             errors.append("Hostname darf nicht leer sein.")
         if network_mode not in ['dhcp', 'static']:
@@ -574,46 +433,36 @@ def network_config():
                 errors.append("Router-Adresse ist erforderlich.")
             if not dns:
                 errors.append("DNS-Server ist erforderlich.")
-        
         if errors:
             for error in errors:
                 flash(error, 'danger')
             return redirect(url_for('network_config'))
-        
         hostname_changed = update_hostname_helper(new_hostname)
         if network_mode == 'static':
             network_changed = update_network_config_helper(network_mode, static_ip, routers, dns)
         else:
             network_changed = update_network_config_helper(network_mode, "", "", "")
-        
         if hostname_changed and network_changed:
             flash("Netzwerkeinstellungen wurden erfolgreich aktualisiert.", "success")
         else:
             flash("Fehler beim Aktualisieren der Netzwerkeinstellungen.", "danger")
         return redirect(url_for('network_config'))
     else:
-        # Ermittlung des aktuellen Hostnamens
         try:
             with open('/etc/hostname', 'r') as f:
                 current_hostname = f.read().strip()
         except Exception as e:
             logging.error(f"Fehler beim Lesen des Hostnamens: {e}")
             current_hostname = ""
-        
-        # Standardwerte setzen
         current_network_mode = 'dhcp'
         current_static_ip = ""
         current_routers = ""
         current_dns = ""
-        
         try:
-            # Zuerst nur den ipv4.method-Wert abfragen
             method_cmd = ["nmcli", "-g", "ipv4.method", "connection", "show", "MyEthernet"]
             method_output = subprocess.check_output(method_cmd, universal_newlines=True).strip()
-            
             if method_output == "manual":
                 current_network_mode = "static"
-                # Nun die restlichen Felder abfragen
                 try:
                     fields_cmd = ["nmcli", "-t", "-f", "ipv4.addresses,ipv4.gateway,ipv4.dns", "connection", "show", "MyEthernet"]
                     fields_output = subprocess.check_output(fields_cmd, universal_newlines=True).strip()
@@ -623,8 +472,8 @@ def network_config():
                             key, value = line.split(":", 1)
                             nmcli_dict[key.strip()] = value.strip()
                     current_static_ip = nmcli_dict.get("ipv4.addresses", "")
-                    current_routers   = nmcli_dict.get("ipv4.gateway", "")
-                    current_dns       = nmcli_dict.get("ipv4.dns", "")
+                    current_routers = nmcli_dict.get("ipv4.gateway", "")
+                    current_dns = nmcli_dict.get("ipv4.dns", "")
                 except Exception as e:
                     logging.error("Fehler beim Abrufen der statischen Netzwerkeinstellungen: " + str(e))
                     iface_config = get_current_interface_config('eth0')
@@ -632,7 +481,6 @@ def network_config():
                     current_static_ip = iface_config.get('ip', '')
                     current_routers = iface_config.get('gateway', '')
                     current_dns = iface_config.get('dns', '')
-
             else:
                 current_network_mode = "dhcp"
                 iface_config = get_current_interface_config('eth0')
@@ -646,7 +494,6 @@ def network_config():
             current_static_ip = iface_config.get('ip', '')
             current_routers = iface_config.get('gateway', '')
             current_dns = iface_config.get('dns', '')
-        
         return render_template(
             'network_config.html',
             hostname=current_hostname,
@@ -655,7 +502,7 @@ def network_config():
             routers=current_routers,
             dns=current_dns
         )
-        
+
 @app.route('/current_image')
 @login_required
 def current_image():
@@ -670,17 +517,14 @@ def current_image():
             data["compat"] = f.read().strip()
     except:
         data["compat"] = ""
-    
     cfg = load_config()
     is_split = cfg.get("split_screen", False)
-    
     if is_split:
         try:
             with open("current_image_left.txt", "r") as f:
                 data["left"] = f.read().strip()
         except:
             data["left"] = ""
-        
         try:
             with open("current_image_right.txt", "r") as f:
                 data["right"] = f.read().strip()
@@ -692,16 +536,15 @@ def current_image():
                 data["fullscreen"] = f.read().strip()
         except:
             data["fullscreen"] = ""
-    
     return jsonify(data)
-    
+
 @app.route('/log_excerpt')
 @login_required
 def log_excerpt():
     try:
         with open('slideshow.log', 'r') as f:
             lines = f.readlines()
-            excerpt = "".join(lines[-20:])  # Letzte 20 Zeilen
+            excerpt = "".join(lines[-20:])
     except Exception as e:
         excerpt = "Keine Log-Daten verfügbar."
     return jsonify({'log_excerpt': excerpt})
@@ -716,6 +559,21 @@ def restart():
         flash("Fehler beim Neustarten: " + str(e), "danger")
         logging.error("Neustart Fehler: " + str(e))
     return redirect(url_for('index'))
+
+# --------------------------------
+# NEU: Funktion für Bildliste aus dem Cache
+# --------------------------------
+def list_cached_images():
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'cache')
+    if not os.path.isdir(cache_dir):
+        return []
+    return [
+        f for f in os.listdir(cache_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+    ]
+
+# Beispiel: So könntest du im Template alle Vorschau-Bilder aus dem Cache anzeigen
+# (siehe Text, nicht im Code unten)
 
 if __name__ == '__main__':
     if not os.path.exists(CONFIG_FILE):
