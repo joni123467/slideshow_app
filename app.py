@@ -10,12 +10,18 @@ import logging
 from logging.handlers import RotatingFileHandler
 import socket
 import platform
-from smb.SMBConnection import SMBConnection
-from contextlib import contextmanager
 import netifaces
 import subprocess  # Für Neustart, Helper-Skripte und Passwortänderung
 import threading
 import time
+
+# ---- NEU: SMB2/3 IMPORTS ----
+from smbprotocol.connection import Connection
+from smbprotocol.session import Session
+from smbprotocol.tree import TreeConnect
+from smbprotocol.open import Open, CreateDisposition, DirectoryAccessMask, ShareAccess, CreateOptions
+from smbprotocol.file_info import FileInformationClass
+import uuid
 
 # ------------------------------
 # Flask-Anwendung und Konfiguration
@@ -164,27 +170,68 @@ def trigger_release_update():
     threading.Thread(target=run_update_script, daemon=True).start()
     return render_template('updating.html', wait_seconds=60)
 
-@contextmanager
-def smb_connection(username, password, domain, client_machine_name, server_name, server_ip):
-    conn = SMBConnection(username, password, client_machine_name, server_name, domain=domain, use_ntlm_v2=True)
-    try:
-        connected = conn.connect(server_ip, 139) or conn.connect(server_ip, 445)
-        if not connected:
-            logging.error(f"Verbindung zum SMB-Server {server_ip} konnte nicht hergestellt werden.")
-            yield None
-        else:
-            logging.info(f"Verbindung zu SMB-Freigabe \\{server_name}\\ erfolgreich hergestellt.")
-            yield conn
-    except Exception as e:
-        logging.error(f"Fehler beim Herstellen der Verbindung zu SMB-Server: {e}")
-        yield None
-    finally:
-        conn.close()
-        logging.info(f"Verbindung zum SMB-Server {server_ip} geschlossen.")
+# --------- NEU: SMB2/3 ohne Kontextmanager! -----------
+def get_image_files(path, username='', password='', domain=''):
+    supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+    image_files = []
 
-# ------------------------------
-# Hilfsfunktionen
-# ------------------------------
+    if path.startswith('smb://'):
+        match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', path)
+        if not match:
+            logging.error("Ungültiges SMB-Pfadformat.")
+            return []
+        server, share, remote_path = match.groups()
+        if remote_path.endswith('/'):
+            remote_path = remote_path[:-1]
+        try:
+            connection = Connection(uuid.uuid4(), server, 445)
+            connection.connect()
+            username_domain = f"{domain}\\{username}" if domain else username
+            session = Session(connection, username_domain, password)
+            session.connect()
+            tree = TreeConnect(session, f"\\\\{server}\\{share}")
+            tree.connect()
+            folder = Open(tree, remote_path)
+            folder.create(
+                impersonation_level=2,
+                desired_access=DirectoryAccessMask.FILE_LIST_DIRECTORY,
+                file_attributes=0,
+                share_access=ShareAccess.FILE_SHARE_READ,
+                create_disposition=CreateDisposition.FILE_OPEN,
+                create_options=CreateOptions.FILE_DIRECTORY_FILE
+            )
+            files = folder.query_directory("*", FileInformationClass.FILE_DIRECTORY_INFORMATION)
+            for f in files:
+                name = f['file_name']
+                if hasattr(name, 'get_value'):
+                    name = name.get_value()
+                if isinstance(name, bytes):
+                    name = name.decode('utf-16-le').rstrip('\x00')
+                if name in ('.', '..') or not name.lower().endswith(supported_extensions):
+                    continue
+                image_files.append(f"smb://{server}/{share}/{remote_path}/{name}")
+            folder.close()
+            tree.disconnect()
+            session.disconnect()
+            connection.disconnect()
+            logging.info(f"Gefundene Bilder im SMB-Pfad: {len(image_files)}")
+        except Exception as e:
+            logging.error(f"Fehler beim Auflisten des Verzeichnisses {remote_path}: {e}")
+    else:
+        if os.path.isdir(path):
+            try:
+                image_files = [
+                    os.path.join(path, f)
+                    for f in os.listdir(path)
+                    if f.lower().endswith(supported_extensions)
+                ]
+                logging.info(f"Gefundene Bilder im lokalen Pfad: {len(image_files)}")
+            except Exception as e:
+                logging.error(f"Fehler beim Lesen des lokalen Pfads: {e}")
+        else:
+            logging.error("Lokaler Pfad ist kein Verzeichnis.")
+    return image_files
+# -----------------------------------------------------
 
 def load_config():
     try:
@@ -200,7 +247,6 @@ def get_current_interface_config(interface='eth0'):
     """Ermittelt aktuelle IP, Gateway und DNS für das angegebene Interface."""
     config = {'ip': '', 'gateway': '', 'dns': ''}
     try:
-        import netifaces
         # IP-Adresse
         addrs = netifaces.ifaddresses(interface)
         if netifaces.AF_INET in addrs:
@@ -218,44 +264,6 @@ def get_current_interface_config(interface='eth0'):
     except Exception as e:
         logging.error(f"Fehler beim Ermitteln der Interface-Konfiguration: {e}")
     return config
-
-
-def get_image_files(path, username='', password='', domain=''):
-    supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
-    image_files = []
-
-    if path.startswith('smb://'):
-        match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', path)
-        if not match:
-            logging.error("Ungültiges SMB-Pfadformat.")
-            return []
-        server, share, remote_path = match.groups()
-
-        with smb_connection(username, password, domain, "slideshow_client", server, server) as conn:
-            if conn:
-                try:
-                    files = conn.listPath(share, remote_path)
-                    for file in files:
-                        file_name = file.filename
-                        if file_name not in ['.', '..'] and file_name.lower().endswith(supported_extensions):
-                            image_files.append(f"smb://{server}/{share}/{remote_path}/{file_name}")
-                    logging.info(f"Gefundene Bilder im SMB-Pfad: {len(image_files)}")
-                except Exception as e:
-                    logging.error(f"Fehler beim Auflisten des Verzeichnisses {remote_path}: {e}")
-    else:
-        if os.path.isdir(path):
-            try:
-                image_files = [
-                    os.path.join(path, f)
-                    for f in os.listdir(path)
-                    if f.lower().endswith(supported_extensions)
-                ]
-                logging.info(f"Gefundene Bilder im lokalen Pfad: {len(image_files)}")
-            except Exception as e:
-                logging.error(f"Fehler beim Lesen des lokalen Pfads: {e}")
-        else:
-            logging.error("Lokaler Pfad ist kein Verzeichnis.")
-    return image_files
 
 def display_message(screen, message, infoObject):
     try:
@@ -275,7 +283,6 @@ def display_message(screen, message, infoObject):
 
 def get_ipv4_address():
     try:
-        import netifaces
         interfaces = netifaces.interfaces()
         for interface in interfaces:
             if interface == 'lo':
@@ -293,17 +300,12 @@ def get_ipv4_address():
     return "Nicht verfügbar"
 
 def get_device_info():
-    import platform
     info = []
     info.append(f"Hostname: {socket.gethostname()}")
     info.append(f"Betriebssystem: {platform.system()} {platform.release()}")
     info.append(f"Python-Version: {platform.python_version()}")
-    
-    cpu_info = platform.processor()
-    if not cpu_info:
-        cpu_info = "Nicht verfügbar"
+    cpu_info = platform.processor() or "Nicht verfügbar"
     info.append(f"CPU: {cpu_info}")
-    
     try:
         with open('/proc/meminfo', 'r') as mem:
             mem_info = mem.read()
@@ -311,13 +313,10 @@ def get_device_info():
         info.append(f"RAM: {int(total_mem) / 1024} MB")
     except:
         info.append("RAM: Nicht verfügbar")
-    
     ipv4 = get_ipv4_address()
     info.append(f"IPv4-Adresse: {ipv4}")
-    
     info.append("")
     info.append("Die Slideshow kann über das Webinterface konfiguriert werden.")
-    
     logging.info("Geräteinformationen gesammelt.")
     return '\n'.join(info)
 
@@ -403,7 +402,7 @@ def logout():
 @app.route('/')
 @login_required
 def index():
-# Lese die letzten 20 Zeilen der Logdatei
+    # Lese die letzten 20 Zeilen der Logdatei
     log_excerpt = ""
     try:
         with open('slideshow.log', 'r') as f:
