@@ -2,13 +2,11 @@
 set -eux
 
 # =============================================================================
-# Slideshow-App Installationsskript (immer neuesten Release-Branch/-Tag installieren,
-# jq installieren und release_branch in config.json schreiben)
+# Slideshow-App Installationsskript (inkl. config-Backup & Restore)
 # =============================================================================
 
 # 1) Basis-Konfiguration
 ADMIN_USER="administrator"
-# Ermittel Home-Verzeichnis des Admin-User (Fallback /home/administrator)
 ADMIN_HOME=$(getent passwd "$ADMIN_USER" | cut -d: -f6 || echo "/home/$ADMIN_USER")
 INSTALL_DIR="$ADMIN_HOME/slideshow_app"
 REPO_URL="https://github.com/joni123467/slideshow_app.git"
@@ -23,9 +21,20 @@ else
   echo "Benutzer '$ADMIN_USER' existiert bereits."
 fi
 
-# Sicherstellen, dass Home-Verzeichnis existiert und dem Admin gehört
 sudo mkdir -p "$ADMIN_HOME"
 sudo chown "$ADMIN_USER":"$ADMIN_USER" "$ADMIN_HOME"
+
+# === NEU: config.json-Backup, falls alter Ordner vorhanden ===
+CONFIG_BAK=""
+if [ -d "$INSTALL_DIR" ]; then
+  if [ -f "$INSTALL_DIR/config.json" ]; then
+    CONFIG_BAK="/tmp/config.json.$(date +%s).bak"
+    cp "$INSTALL_DIR/config.json" "$CONFIG_BAK"
+    echo "Vorhandene config.json wurde nach $CONFIG_BAK gesichert."
+  fi
+  echo "Lösche alten Installationsordner $INSTALL_DIR"
+  sudo rm -rf "$INSTALL_DIR"
+fi
 
 # 3) System-Pakete installieren (inklusive jq)
 echo "Installiere System-Pakete..."
@@ -41,64 +50,56 @@ sudo apt install -y \
   build-essential \
   jq
 
-# 4) Repo klonen oder aktualisieren
-if [ ! -d "$INSTALL_DIR/.git" ]; then
-  echo "Klonen des Repositories nach $INSTALL_DIR"
-  sudo -u "$ADMIN_USER" git clone "$REPO_URL" "$INSTALL_DIR"
-else
-  echo "Aktualisiere Repo in $INSTALL_DIR"
-  cd "$INSTALL_DIR"
-  sudo -u "$ADMIN_USER" git fetch --all --tags
-  sudo -u "$ADMIN_USER" git fetch --all
-  sudo -u "$ADMIN_USER" git reset --hard origin/main
-fi
+# 4) Repo klonen
+echo "Klonen des Repositories nach $INSTALL_DIR"
+sudo -u "$ADMIN_USER" git clone "$REPO_URL" "$INSTALL_DIR"
 
 cd "$INSTALL_DIR"
+
+# === NEU: config.json-Backup zurückspielen (noch nicht überschreiben, falls Repo-eigene config.json da ist) ===
+if [ -n "$CONFIG_BAK" ] && [ -f "$CONFIG_BAK" ]; then
+  # Wenn das neue Repo eine config.json mit neuen Keys enthält: Mergen!
+  if [ -f config.json ]; then
+    TMP_MERGE=$(mktemp)
+    jq -s '.[0] * .[1]' config.json "$CONFIG_BAK" > "$TMP_MERGE"
+    mv "$TMP_MERGE" config.json
+    echo "Alte Konfiguration in neue config.json übernommen und gemerged."
+  else
+    cp "$CONFIG_BAK" config.json
+    echo "Alte config.json wurde wiederhergestellt."
+  fi
+  sudo chown "$ADMIN_USER":"$ADMIN_USER" config.json
+fi
 
 # 5) Release-Branch/-Tag ermitteln
 echo "Ermittle verfügbaren Release-Branch oder Tag..."
 
-# 5.1) Holen aller remote-Branches und Tags
 sudo -u "$ADMIN_USER" git fetch --all --tags
 
-# 5.2) Prüfe config.json auf bestehenden release_branch
 CONFIG_PATH="$INSTALL_DIR/config.json"
 RELEASE_REF=""
-
 if [ -f "$CONFIG_PATH" ]; then
-  # Lese den Wert, falls vorhanden. Falls key fehlt oder leer, bleibt RELEASE_REF leer.
   RELEASE_REF=$(jq -r '.release_branch // empty' "$CONFIG_PATH")
-  # Trim whitespace
   RELEASE_REF=$(echo "$RELEASE_REF" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 fi
 
 if [ -n "$RELEASE_REF" ]; then
   echo "-> Verwende release_branch aus config.json: '$RELEASE_REF'"
 else
-  # 5.3) Suche zuerst nach allen Release-Branches (remote: origin/release/*)
-  BRANCHES_RAW=$(git branch -r \
-    | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' \
-    | sed 's@origin/@@' \
-    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
+  BRANCHES_RAW=$(git branch -r | grep -E 'origin/release/v[0-9]+\.[0-9]+\.[0-9]+' | sed 's@origin/@@' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   if [ -n "$BRANCHES_RAW" ]; then
-    # Sortiere semantisch aufsteigend und wähle das letzte (höchste)
     RELEASE_REF=$(echo "$BRANCHES_RAW" | sort -V | tail -n1)
     echo "   Neuster Release-Branch gefunden: '$RELEASE_REF'"
   else
-    # 5.4) Keine Release-Branches, suche nach Tags
     TAGS_RAW=$(git tag -l --sort=-version:refname)
     if [ -n "$TAGS_RAW" ]; then
       RELEASE_REF=$(echo "$TAGS_RAW" | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       echo "   Neustes Release-Tag gefunden: '$RELEASE_REF'"
     else
-      # 5.5) Fallback auf main, falls keine Branches und keine Tags existieren
       echo "   Warnung: Keine Release-Branches oder Tags gefunden. Nutze 'main' als Fallback."
       RELEASE_REF="main"
     fi
   fi
-
-  # 5.6) Schreibe ermitteltes RELEASE_REF in config.json zurück
   if [ -f "$CONFIG_PATH" ]; then
     tmpfile=$(mktemp)
     jq --arg ref "$RELEASE_REF" '.release_branch = $ref' "$CONFIG_PATH" > "$tmpfile"
