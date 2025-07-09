@@ -68,6 +68,15 @@ def to_relative_cache_path(absolute_path):
     return f"/static/cache/{filename}"
 
 def prefetch_smb2_images(smb_path, username, password, domain):
+    import uuid
+    from smbprotocol.connection import Connection
+    from smbprotocol.session import Session
+    from smbprotocol.tree import TreeConnect
+    from smbprotocol.open import Open, CreateDisposition, FilePipePrinterAccessMask, DirectoryAccessMask, ShareAccess, CreateOptions
+    from smbprotocol.file_info import FileInformationClass
+
+    import os, re, logging
+
     smb_path = normalize_smb_path(smb_path)
     supported_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
     match = re.match(r'smb://([^/]+)/([^/]+)/(.*)', smb_path)
@@ -84,17 +93,15 @@ def prefetch_smb2_images(smb_path, username, password, domain):
         logging.debug(f"Starte SMB-Connection zu {server}/{share}/{remote_path}")
         connection = Connection(uuid.uuid4(), server, 445)
         connection.connect()
-        if domain:
-            username_domain = f"{domain}\\{username}"
-        else:
-            username_domain = username
+        username_domain = f"{domain}\\{username}" if domain else username
         session = Session(connection, username_domain, password)
         session.connect()
         tree = TreeConnect(session, f"\\\\{server}\\{share}")
         tree.connect()
-        folder = Open(tree, remote_path)
+        # ACHTUNG: Pfad immer mit Backslashes!
+        folder = Open(tree, remote_path.replace("/", "\\"))
         folder.create(
-            impersonation_level=2,  # Standard ist Impersonation
+            impersonation_level=2,
             desired_access=DirectoryAccessMask.FILE_LIST_DIRECTORY,
             file_attributes=0,
             share_access=ShareAccess.FILE_SHARE_READ,
@@ -112,10 +119,13 @@ def prefetch_smb2_images(smb_path, username, password, domain):
             if name in ('.', '..') or not name.lower().endswith(supported_extensions):
                 logging.debug(f"Überspringe Datei/Ordner: {name}")
                 continue
-            remote_file = f"{remote_path}/{name}".replace('//', '/').replace('\\', '/')
+            # Hier wird der Pfad korrekt gebaut:
+            smb_file_path = (remote_path + "\\" + name) if remote_path else name
+            smb_file_path = smb_file_path.replace("/", "\\").replace("\\\\", "\\")
+            logging.warning(f"Open(tree, {smb_file_path!r}) für Download.")
             cache_path = os.path.join(cache_dir, name)
             try:
-                file_open = Open(tree, remote_file)
+                file_open = Open(tree, smb_file_path)
                 file_open.create(
                     impersonation_level=2,
                     desired_access=FilePipePrinterAccessMask.FILE_READ_DATA,
@@ -136,7 +146,7 @@ def prefetch_smb2_images(smb_path, username, password, domain):
                 local_files.append(cache_path)
                 count += 1
             except Exception:
-                logging.warning(f"Fehler beim Laden der Datei {remote_file}", exc_info=True)
+                logging.warning(f"Fehler beim Laden der Datei {smb_file_path}", exc_info=True)
         folder.close()
         tree.disconnect()
         session.disconnect()
@@ -145,6 +155,8 @@ def prefetch_smb2_images(smb_path, username, password, domain):
     except Exception:
         logging.exception(f"Fehler beim Zugriff auf SMB2/3: {server}/{share}/{remote_path}")
     return local_files
+
+
 
 def load_config():
     default_config = {
